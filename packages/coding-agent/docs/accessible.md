@@ -37,7 +37,7 @@ TERM=dumb pi           # auto-detected
   consecutive file operations are grouped by type (`» read: a.ts, b.ts`), and `bash`
   shows its command plus a single `ok`/`fail` summary line.
 - **Minimal chrome.** Responses are printed directly (no `Assistant:` header) and there is
-  no end-of-turn marker — the `Δ` prompt simply returns when it is your turn to type.
+  no end-of-turn marker — the `^` prompt simply returns when it is your turn to type.
 
 ## Example session
 
@@ -47,7 +47,7 @@ Model: anthropic/claude-opus-4-5   Thinking: medium
 Directory: /home/you/project
 Type your message and press Enter. Type /help for commands, /quit to exit.
 
-Δ add a -V alias for --version and run the arg tests
+^ add a -V alias for --version and run the arg tests
 I'll read the file, add the alias, then run the tests.
 
 » read: args.ts
@@ -57,7 +57,7 @@ I'll read the file, add the alias, then run the tests.
 
 Done. Added -V alongside --version; the arg-parser tests pass (12 of 12).
 
-Δ
+^
 ```
 
 When no model is configured yet, the banner reads `No model selected. Use /login or /model
@@ -87,9 +87,9 @@ where each assistant message is buffered and emitted as a single block when it f
 ```text
 pi --accessible --block-output      # start in block mode (also PI_BLOCK_OUTPUT=1)
 
-Δ /stream block                     # or switch at any time
-Δ /stream line
-Δ /stream                           # show the current mode
+^ /stream block                     # or switch at any time
+^ /stream line
+^ /stream                           # show the current mode
 ```
 
 ### Logging in
@@ -97,7 +97,7 @@ pi --accessible --block-output      # start in block mode (also PI_BLOCK_OUTPUT=
 `/login` first asks how you want to authenticate:
 
 ```text
-Δ /login
+^ /login
 Select authentication method:
   1. Use a subscription
   2. Use an API key

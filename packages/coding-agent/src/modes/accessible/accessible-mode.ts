@@ -167,7 +167,7 @@ export async function runAccessibleMode(
 		while (exitCode === null) {
 			let line: string;
 			try {
-				line = await prompter.question("\nΔ ");
+				line = await prompter.question("\n^ ");
 			} catch {
 				break; // input closed (EOF / Ctrl+D)
 			}

@@ -22,6 +22,8 @@ export interface BuildSystemPromptOptions {
 	contextFiles?: Array<{ path: string; content: string }>;
 	/** Pre-loaded skills. */
 	skills?: Skill[];
+	/** UI mode - affects output formatting guidelines. */
+	mode?: "tui" | "accessible" | "rpc" | "json" | "print";
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -35,7 +37,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		cwd,
 		contextFiles: providedContextFiles,
 		skills: providedSkills,
+		mode,
 	} = options;
+	const isAccessibleMode = mode === "accessible";
 	const resolvedCwd = cwd;
 	const promptCwd = resolvedCwd.replace(/\\/g, "/");
 
@@ -124,6 +128,16 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	// Always include these
 	addGuideline("Be concise in your responses");
 	addGuideline("Show file paths clearly when working with files");
+
+	// Accessible mode guidelines for screen reader users
+	if (isAccessibleMode) {
+		addGuideline("No markdown formatting (no **, #, `, etc.) - write plain text only");
+		addGuideline("No tables - present data as prose or numbered lists");
+		addGuideline("No ASCII art, diagrams, or visual decorations");
+		addGuideline("Use numbered lists instead of bullet points");
+		addGuideline("Announce structure verbally (say 'First:', 'Here is the code:') instead of using headings");
+		addGuideline("For code output: use plain indentation, no code fence markers");
+	}
 
 	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
 

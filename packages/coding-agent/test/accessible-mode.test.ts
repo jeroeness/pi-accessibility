@@ -65,7 +65,7 @@ describe("runAccessibleMode (end to end)", () => {
 		harness.cleanup();
 	});
 
-	it("shows the no-model banner and uses the Δ prompt", async () => {
+	it("shows the no-model banner and uses the ^ prompt", async () => {
 		const { runtime } = makeStubRuntime({ model: undefined });
 		const rec = createRecordingWriter();
 		const fake = createFakePrompter(["/quit"]);
@@ -78,7 +78,7 @@ describe("runAccessibleMode (end to end)", () => {
 
 		expect(code).toBe(0);
 		expect(rec.lines).toContain("No model selected. Use /login or /model to select a model.");
-		expect(fake.prompts.some((prompt) => prompt.includes("Δ"))).toBe(true);
+		expect(fake.prompts.some((prompt) => prompt.includes("^"))).toBe(true);
 	});
 });
 

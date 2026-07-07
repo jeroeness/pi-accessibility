@@ -111,4 +111,47 @@ describe("buildSystemPrompt", () => {
 			expect(prompt.match(/- Use dynamic_tool for summaries\./g)).toHaveLength(1);
 		});
 	});
+
+	describe("accessible mode", () => {
+		test("includes screen reader guidelines when mode is accessible", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: ["read", "bash"],
+				contextFiles: [],
+				skills: [],
+				cwd: process.cwd(),
+				mode: "accessible",
+			});
+
+			expect(prompt).toContain("No markdown formatting");
+			expect(prompt).toContain("No tables");
+			expect(prompt).toContain("No ASCII art");
+			expect(prompt).toContain("numbered lists instead of bullet points");
+			expect(prompt).toContain("Announce structure verbally");
+			expect(prompt).toContain("no code fence markers");
+		});
+
+		test("does not include screen reader guidelines for other modes", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: ["read", "bash"],
+				contextFiles: [],
+				skills: [],
+				cwd: process.cwd(),
+				mode: "tui",
+			});
+
+			expect(prompt).not.toContain("No markdown formatting");
+			expect(prompt).not.toContain("No tables");
+		});
+
+		test("does not include screen reader guidelines when mode is undefined", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: ["read", "bash"],
+				contextFiles: [],
+				skills: [],
+				cwd: process.cwd(),
+			});
+
+			expect(prompt).not.toContain("No markdown formatting");
+		});
+	});
 });

@@ -974,6 +974,7 @@ export class AgentSession {
 			selectedTools: validToolNames,
 			toolSnippets,
 			promptGuidelines,
+			mode: this._extensionMode,
 		};
 		return buildSystemPrompt(this._baseSystemPromptOptions);
 	}

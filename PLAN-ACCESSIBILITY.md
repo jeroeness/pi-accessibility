@@ -30,7 +30,7 @@ Implemented and verified on 2026-07-07:
 - **New mode** in `src/modes/accessible/`: `types.ts`, `line-writer.ts`, `prompter.ts`,
   `event-renderer.ts`, `text-ui-context.ts`, `commands.ts`, `login.ts`, `model-label.ts`,
   `accessible-mode.ts`.
-- **Low-clutter output**: no `Assistant:` header, no `[turn complete]` marker, `Δ` (U+0394)
+- **Low-clutter output**: no `Assistant:` header, no `[turn complete]` marker, `^`
   prompt, `/model` grouped by provider, token/TPS/cache status suppressed, and a
   "No model selected. Use /login or /model" banner (accessible mode can start without a model).
 - **Streaming toggle**: `--block-output` / `PI_BLOCK_OUTPUT` / `/stream block|line` switches
@@ -142,7 +142,7 @@ Loop outline:
 2. Print a short, screen-reader-friendly banner: app + version, active model, cwd, and
    "Type your message and press Enter. Type /help for commands, /quit to exit."
 3. If `initialMessage` / `initialMessages` present, run them through the same submit path before prompting.
-4. `rl.prompt()` with a stable, minimal prompt string (`"Δ "`, U+0394). On each submitted line:
+4. `rl.prompt()` with a stable, minimal prompt string (`"^ "`). On each submitted line:
    - Empty line → reprompt.
    - Starts with `/` → dispatch via `commands.ts` (see §4). Unknown `/x` that matches an extension
      command → `session.prompt(text)` (extensions consume slash input via prompt, per
@@ -195,7 +195,7 @@ Rendering rules (all plain text, labeled prefixes — no color-only meaning, no 
 | `bash` end (ok) | `  ✓ bash ok — <single summary line>` where the summary = last non-empty stdout line, ANSI-stripped, truncated. Omit the ` — …` if there is no output. **Full output is never printed.** |
 | `bash` end (fail) | `  ✗ bash failed (exit <code>) — <single line>` (last stderr/stdout line or error message, truncated) |
 | other one-off tool end | `» <name>: <short one-line result or ok/fail>` |
-| turn resolves (`prompt()` returns) | flush pending group + buffer, then reprompt (no end-of-turn marker; the `Δ` prompt, prefixed with a blank line, separates turns) |
+| turn resolves (`prompt()` returns) | flush pending group + buffer, then reprompt (no end-of-turn marker; the `^` prompt, prefixed with a blank line, separates turns) |
 | `compaction_start/end` | `[compacting context…]` / `[context compacted] N → M tokens` |
 | `auto_retry_start` | `[retrying (attempt n/m) after error: …]` |
 | `message error` / `done reason=error` | `Error: <message>` (to stderr) |

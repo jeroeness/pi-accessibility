@@ -18,7 +18,6 @@ import type { EventRenderer, LineWriter } from "./types.ts";
 
 const FILE_TOOLS = new Set(["read", "edit", "write", "ls", "grep", "find"]);
 const MAX_BUFFERED_LINE = 2000;
-const MAX_COMMAND = 80;
 const MAX_SUMMARY = 100;
 
 export interface EventRendererOptions {
@@ -33,11 +32,19 @@ interface FileEntry {
 	label: string;
 }
 
+interface BashEntry {
+	firstWord: string;
+	ok: boolean;
+}
+
 class AccessibleEventRenderer implements EventRenderer {
 	private textBuf = "";
 	private fileRun: FileEntry[] = [];
+	private bashRun: BashEntry[] = [];
 	/** toolCallId -> display label captured at tool start (args are not on the end event). */
 	private readonly pendingFileLabels = new Map<string, string>();
+	/** toolCallId -> first word of command captured at bash start. */
+	private readonly pendingBashLabels = new Map<string, string>();
 	private readonly writer: LineWriter;
 	private blockOutput: boolean;
 
@@ -70,6 +77,7 @@ class AccessibleEventRenderer implements EventRenderer {
 				break;
 			case "turn_end":
 			case "agent_end":
+				this.flushBashRun();
 				this.flushFileRun();
 				this.flushText();
 				break;
@@ -97,6 +105,7 @@ class AccessibleEventRenderer implements EventRenderer {
 	}
 
 	endTurn(): void {
+		this.flushBashRun();
 		this.flushFileRun();
 		this.flushText();
 	}
@@ -130,6 +139,7 @@ class AccessibleEventRenderer implements EventRenderer {
 
 	private appendText(delta: string): void {
 		// Assistant text follows any pending tool group, in reading order.
+		this.flushBashRun();
 		this.flushFileRun();
 		this.textBuf += delta;
 		// Block mode: hold the whole message; flushText emits it at once on message end.
@@ -165,27 +175,30 @@ class AccessibleEventRenderer implements EventRenderer {
 
 	private handleToolStart(toolCallId: string, toolName: string, toolArgs: unknown): void {
 		if (toolName === "bash") {
-			this.flushFileRun();
-			this.writer.line(`» bash: ${truncateLine(commandOf(toolArgs), MAX_COMMAND)}`);
+			this.pendingBashLabels.set(toolCallId, firstWordOf(commandOf(toolArgs)));
 			return;
 		}
 		if (FILE_TOOLS.has(toolName)) {
 			this.pendingFileLabels.set(toolCallId, fileLabel(toolName, toolArgs));
 			return;
 		}
-		// Non-file one-off tools render at completion; flush any pending file run first.
+		// Non-file one-off tools render at completion; flush any pending runs first.
+		this.flushBashRun();
 		this.flushFileRun();
 	}
 
 	private handleToolEnd(toolCallId: string, toolName: string, result: unknown, isError: boolean): void {
 		if (toolName === "bash") {
-			this.renderBashEnd(result, isError);
+			const firstWord = this.pendingBashLabels.get(toolCallId) ?? "bash";
+			this.pendingBashLabels.delete(toolCallId);
+			this.bashRun.push({ firstWord, ok: !isError });
 			return;
 		}
 		if (FILE_TOOLS.has(toolName)) {
 			const label = this.pendingFileLabels.get(toolCallId) ?? toolName;
 			this.pendingFileLabels.delete(toolCallId);
 			if (isError) {
+				this.flushBashRun();
 				this.flushFileRun();
 				const message = lastNonEmptyLine(extractResultText(result)) || "failed";
 				this.writer.line(`» ${toolName}: ${label} — failed: ${truncateLine(message, MAX_SUMMARY)}`);
@@ -204,15 +217,28 @@ class AccessibleEventRenderer implements EventRenderer {
 		}
 	}
 
-	private renderBashEnd(result: unknown, isError: boolean): void {
-		const summary = lastNonEmptyLine(extractResultText(result));
-		const suffix = summary ? ` — ${truncateLine(summary, MAX_SUMMARY)}` : "";
-		if (isError) {
-			const code = exitCodeOf(result);
-			this.writer.line(`  ✗ bash failed${code !== undefined ? ` (exit ${code})` : ""}${suffix}`);
-		} else {
-			this.writer.line(`  ✓ bash ok${suffix}`);
+	private flushBashRun(): void {
+		if (this.bashRun.length === 0) {
+			return;
 		}
+		// Group by (firstWord, ok) preserving first-seen order
+		const order: string[] = [];
+		const counts = new Map<string, number>();
+		for (const entry of this.bashRun) {
+			const key = `${entry.firstWord}:${entry.ok ? "ok" : "failed"}`;
+			if (!counts.has(key)) {
+				order.push(key);
+				counts.set(key, 0);
+			}
+			counts.set(key, counts.get(key)! + 1);
+		}
+		for (const key of order) {
+			const [firstWord, status] = key.split(":");
+			const count = counts.get(key)!;
+			const countStr = count > 1 ? ` (${count})` : "";
+			this.writer.line(`bash ${firstWord}${countStr} ${status}`);
+		}
+		this.bashRun = [];
 	}
 
 	private flushFileRun(): void {
@@ -237,6 +263,7 @@ class AccessibleEventRenderer implements EventRenderer {
 	}
 
 	private flushPending(): void {
+		this.flushBashRun();
 		this.flushFileRun();
 		this.flushText();
 	}
@@ -259,6 +286,12 @@ class AccessibleEventRenderer implements EventRenderer {
 
 function str(value: unknown): string {
 	return typeof value === "string" ? value : "";
+}
+
+function firstWordOf(command: string): string {
+	const trimmed = command.trim();
+	const spaceIndex = trimmed.indexOf(" ");
+	return spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -328,18 +361,6 @@ function extractResultText(result: unknown): string {
 		return typeof record.stderr === "string" ? `${record.stdout}\n${record.stderr}` : record.stdout;
 	}
 	return "";
-}
-
-function exitCodeOf(result: unknown): number | undefined {
-	const record = asRecord(result);
-	const details = asRecord(record?.details);
-	if (details && typeof details.exitCode === "number") {
-		return details.exitCode;
-	}
-	if (record && typeof record.exitCode === "number") {
-		return record.exitCode;
-	}
-	return undefined;
 }
 
 export function createEventRenderer(writer: LineWriter, options: EventRendererOptions = {}): EventRenderer {
