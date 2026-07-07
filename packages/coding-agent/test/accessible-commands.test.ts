@@ -47,14 +47,26 @@ function makeCtx(
 	const runtime = { session, newSession } as unknown as AgentSessionRuntime;
 	const rebindSession = overrides.rebindSession ?? vi.fn().mockResolvedValue(undefined);
 
+	let blockOutput = false;
+	const setBlockOutput = vi.fn((value: boolean) => {
+		blockOutput = value;
+	});
+	const renderer = {
+		handle: () => {},
+		endTurn: () => {},
+		setBlockOutput,
+		getBlockOutput: () => blockOutput,
+	};
+
 	const ctx: CommandContext = {
 		session,
 		runtime,
 		writer: rec.writer,
 		prompter: fake.prompter,
+		renderer,
 		rebindSession: rebindSession as unknown as () => Promise<void>,
 	};
-	return { ctx, rec, setModel, compact, newSession, rebindSession, session };
+	return { ctx, rec, setModel, compact, newSession, rebindSession, session, setBlockOutput };
 }
 
 describe("dispatchCommand routing", () => {
@@ -88,11 +100,14 @@ describe("dispatchCommand routing", () => {
 });
 
 describe("/model", () => {
-	it("lists models and switches by number", async () => {
+	it("lists models grouped by provider and switches by number", async () => {
 		const { ctx, rec, setModel } = makeCtx({ prompterInputs: ["2"] });
 		expect(await dispatchCommand("/model", ctx)).toEqual({ kind: "handled" });
-		expect(rec.lines).toContain("  1. anthropic/opus");
-		expect(rec.lines).toContain("  2. openai/gpt");
+		// Grouped: provider headers with model ids indented under them, numbered across the list.
+		expect(rec.lines).toContain("anthropic:");
+		expect(rec.lines).toContain("  1. opus");
+		expect(rec.lines).toContain("openai:");
+		expect(rec.lines).toContain("  2. gpt");
 		expect(setModel).toHaveBeenCalledWith(MODELS[1]);
 	});
 
@@ -137,5 +152,20 @@ describe("/compact and /session and /new", () => {
 		expect(await dispatchCommand("/new", ctx)).toEqual({ kind: "handled" });
 		expect(newSession).toHaveBeenCalled();
 		expect(rebindSession).toHaveBeenCalled();
+	});
+});
+
+describe("/stream", () => {
+	it("toggles block and line streaming and reports the current mode", async () => {
+		const { ctx, rec, setBlockOutput } = makeCtx();
+
+		expect(await dispatchCommand("/stream block", ctx)).toEqual({ kind: "handled" });
+		expect(setBlockOutput).toHaveBeenLastCalledWith(true);
+
+		await dispatchCommand("/stream line", ctx);
+		expect(setBlockOutput).toHaveBeenLastCalledWith(false);
+
+		await dispatchCommand("/stream", ctx);
+		expect(rec.lines.join("\n")).toContain("Streaming mode: line");
 	});
 });

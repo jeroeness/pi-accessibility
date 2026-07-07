@@ -28,15 +28,16 @@ TERM=dumb pi           # auto-detected
 
 - **Append-only, no repaint.** Output is written top-to-bottom in the order things happen.
   Nothing is ever redrawn in place, so a screen reader never re-reads changed content.
-- **No spinners or animation.** Progress is conveyed with discrete lines
-  (`» tool …`, `✓ / ✗`, `[turn complete]`) rather than a moving indicator.
-- **Text, not color.** Every state is labeled in words (`Assistant:`, `Error:`,
-  `[interrupted]`, `[turn complete]`). ANSI escape codes are stripped from all output.
+- **No spinners or animation, and no status counters.** Progress is conveyed with discrete
+  lines (`» tool …`, `✓ / ✗`) rather than a moving indicator; the token/TPS/cache counters
+  from the graphical footer are not shown.
+- **Text, not color.** Every state is labeled in words (`Error:`, `[interrupted]`). ANSI
+  escape codes are stripped from all output.
 - **Model thinking is not shown**, and tool output is summarized rather than dumped:
   consecutive file operations are grouped by type (`» read: a.ts, b.ts`), and `bash`
   shows its command plus a single `ok`/`fail` summary line.
-- **Turn boundaries are explicit.** After each response you see `[turn complete]` and then
-  the `>` prompt, so you always know when it is your turn to type.
+- **Minimal chrome.** Responses are printed directly (no `Assistant:` header) and there is
+  no end-of-turn marker — the `Δ` prompt simply returns when it is your turn to type.
 
 ## Example session
 
@@ -46,9 +47,7 @@ Model: anthropic/claude-opus-4-5   Thinking: medium
 Directory: /home/you/project
 Type your message and press Enter. Type /help for commands, /quit to exit.
 
-> add a -V alias for --version and run the arg tests
-
-Assistant:
+Δ add a -V alias for --version and run the arg tests
 I'll read the file, add the alias, then run the tests.
 
 » read: args.ts
@@ -56,13 +55,13 @@ I'll read the file, add the alias, then run the tests.
 » bash: npm run test -- args
   ✓ bash ok — 12 passed (12)
 
-Assistant:
 Done. Added -V alongside --version; the arg-parser tests pass (12 of 12).
 
-[turn complete]
-
->
+Δ
 ```
+
+When no model is configured yet, the banner reads `No model selected. Use /login or /model
+to select a model.` — run `/login` to sign in.
 
 ## Commands
 
@@ -74,15 +73,31 @@ Done. Added -V alongside --version; the arg-parser tests pass (12 of 12).
 | `/model [pattern]` | Show the current model, or switch it (numbered list, or match by pattern). |
 | `/compact [notes]` | Summarize and shrink the conversation context. |
 | `/session` | Show session info and stats. |
+| `/stream [block\|line]` | Show or switch how replies stream (see below). |
 | `/new` | Start a fresh session. |
 | `/quit` (or Ctrl+D) | Exit. |
+
+### Streaming mode: line vs block
+
+By default the agent's reply streams **line by line** as it is generated. Some screen
+readers cope better when a reply arrives all at once, so you can switch to **block** mode,
+where each assistant message is buffered and emitted as a single block when it finishes
+(tool activity lines still appear in order):
+
+```text
+pi --accessible --block-output      # start in block mode (also PI_BLOCK_OUTPUT=1)
+
+Δ /stream block                     # or switch at any time
+Δ /stream line
+Δ /stream                           # show the current mode
+```
 
 ### Logging in
 
 `/login` first asks how you want to authenticate:
 
 ```text
-> /login
+Δ /login
 Select authentication method:
   1. Use a subscription
   2. Use an API key

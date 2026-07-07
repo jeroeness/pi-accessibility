@@ -6,7 +6,9 @@
  * agent as a prompt; anything else prints a hint.
  */
 
+import type { Model } from "@earendil-works/pi-ai";
 import { runLogin, runLogout } from "./login.ts";
+import { modelLabel } from "./model-label.ts";
 import type { CommandContext, CommandResult } from "./types.ts";
 
 const HELP_LINES = [
@@ -17,6 +19,7 @@ const HELP_LINES = [
 	"  /model [pattern]   Show or switch the active model",
 	"  /compact [notes]   Summarize and shrink the conversation context",
 	"  /session           Show session info and stats",
+	"  /stream [block|line] Show or set how replies stream (block = whole message at once)",
 	"  /new               Start a fresh session",
 	"  /quit  (or Ctrl+D) Exit",
 	"Type anything else to send it to the agent. Ctrl+C interrupts a running turn.",
@@ -71,6 +74,10 @@ export async function dispatchCommand(line: string, ctx: CommandContext): Promis
 			handleSession(ctx);
 			return { kind: "handled" };
 
+		case "stream":
+			handleStream(ctx, rest);
+			return { kind: "handled" };
+
 		default:
 			// Extension-registered commands are consumed by the agent as a prompt.
 			if (ctx.session.extensionRunner.getCommand(name)) {
@@ -95,10 +102,9 @@ async function handleNew(ctx: CommandContext): Promise<void> {
 async function handleModel(ctx: CommandContext, pattern: string): Promise<void> {
 	const models = await ctx.session.modelRegistry.getAvailable();
 	const current = ctx.session.model;
-	const currentLabel = current ? `${current.provider}/${current.id}` : "(none)";
 
 	if (models.length === 0) {
-		ctx.writer.line("No models are available. Configure a provider first.");
+		ctx.writer.line("No models are available. Use /login to sign in to a provider.");
 		return;
 	}
 
@@ -109,7 +115,7 @@ async function handleModel(ctx: CommandContext, pattern: string): Promise<void> 
 			models.find((m) => `${m.provider}/${m.id}`.toLowerCase().includes(lowered)) ??
 			models.find((m) => m.id.toLowerCase().includes(lowered));
 		if (!match) {
-			ctx.writer.line(`No model matching "${pattern}". Current model: ${currentLabel}.`);
+			ctx.writer.line(`No model matching "${pattern}". Current model: ${modelLabel(current)}.`);
 			return;
 		}
 		await ctx.session.setModel(match);
@@ -117,20 +123,56 @@ async function handleModel(ctx: CommandContext, pattern: string): Promise<void> 
 		return;
 	}
 
-	ctx.writer.line(`Current model: ${currentLabel}`);
+	// Group by provider so the list reads as "provider: model" instead of repeating the
+	// provider prefix on every line. Numbering runs across the whole (grouped) list.
+	const byProvider = new Map<string, Model<any>[]>();
+	const providerOrder: string[] = [];
+	for (const model of models) {
+		let list = byProvider.get(model.provider);
+		if (!list) {
+			list = [];
+			byProvider.set(model.provider, list);
+			providerOrder.push(model.provider);
+		}
+		list.push(model);
+	}
+	providerOrder.sort((a, b) => a.localeCompare(b));
+
+	ctx.writer.line(`Current model: ${modelLabel(current)}`);
 	ctx.writer.line("Available models:");
-	models.forEach((model, index) => {
-		ctx.writer.line(`  ${index + 1}. ${model.provider}/${model.id}`);
-	});
+	const ordered: Model<any>[] = [];
+	for (const provider of providerOrder) {
+		ctx.writer.line(`${provider}:`);
+		const providerModels = (byProvider.get(provider) ?? []).slice().sort((a, b) => a.id.localeCompare(b.id));
+		for (const model of providerModels) {
+			ordered.push(model);
+			ctx.writer.line(`  ${ordered.length}. ${model.id}`);
+		}
+	}
+
 	const answer = await ctx.prompter.question("Select a model number (Enter to keep current): ");
 	const choice = Number.parseInt(answer.trim(), 10);
-	if (answer.trim() === "" || Number.isNaN(choice) || choice < 1 || choice > models.length) {
+	if (answer.trim() === "" || Number.isNaN(choice) || choice < 1 || choice > ordered.length) {
 		ctx.writer.line("Keeping current model.");
 		return;
 	}
-	const selected = models[choice - 1];
+	const selected = ordered[choice - 1];
 	await ctx.session.setModel(selected);
 	ctx.writer.line(`Model set to ${selected.provider}/${selected.id}.`);
+}
+
+function handleStream(ctx: CommandContext, arg: string): void {
+	const mode = arg.trim().toLowerCase();
+	if (mode === "block") {
+		ctx.renderer.setBlockOutput(true);
+		ctx.writer.line("Streaming mode: block (each reply is emitted as one block).");
+	} else if (mode === "line") {
+		ctx.renderer.setBlockOutput(false);
+		ctx.writer.line("Streaming mode: line (replies stream line by line).");
+	} else {
+		const current = ctx.renderer.getBlockOutput() ? "block" : "line";
+		ctx.writer.line(`Streaming mode: ${current}. Usage: /stream block|line`);
+	}
 }
 
 async function handleCompact(ctx: CommandContext, instructions: string): Promise<void> {
@@ -148,9 +190,7 @@ function handleSession(ctx: CommandContext): void {
 	const model = ctx.session.model;
 	const name = ctx.session.sessionName ? ` (${ctx.session.sessionName})` : " (unnamed)";
 	ctx.writer.line(`Session: ${ctx.session.sessionId}${name}`);
-	ctx.writer.line(
-		`Model: ${model ? `${model.provider}/${model.id}` : "(none)"}   Thinking: ${ctx.session.thinkingLevel}`,
-	);
+	ctx.writer.line(`Model: ${modelLabel(model)}   Thinking: ${ctx.session.thinkingLevel}`);
 	ctx.writer.line(
 		`Messages: ${stats.totalMessages} (user ${stats.userMessages}, assistant ${stats.assistantMessages}, tool calls ${stats.toolCalls})`,
 	);

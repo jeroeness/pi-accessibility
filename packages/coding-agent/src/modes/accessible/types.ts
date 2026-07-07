@@ -21,6 +21,11 @@ export interface AccessibleModeOptions {
 	initialMessages?: string[];
 	/** Affects error/diagnostic verbosity only. NEVER surfaces model thinking. */
 	verbose?: boolean;
+	/**
+	 * When true, buffer each assistant message and emit it as a single block instead of
+	 * streaming it line by line (can be less confusing for some screen readers).
+	 */
+	blockOutput?: boolean;
 }
 
 /**
@@ -65,6 +70,10 @@ export interface EventRenderer {
 	handle(event: AgentSessionEvent): void;
 	/** Flush any pending buffers/tool groups (call when a turn ends). */
 	endTurn(): void;
+	/** Buffer whole assistant messages (true) vs stream line by line (false). */
+	setBlockOutput(enabled: boolean): void;
+	/** Whether block streaming is currently enabled. */
+	getBlockOutput(): boolean;
 }
 
 /** Result of dispatching a slash command. */
@@ -82,6 +91,8 @@ export interface CommandContext {
 	runtime: AgentSessionRuntime;
 	writer: LineWriter;
 	prompter: Prompter;
+	/** The active event renderer (for the /stream toggle). */
+	renderer: EventRenderer;
 	/** Re-wire extensions + event subscription after a session is replaced. */
 	rebindSession: () => Promise<void>;
 }

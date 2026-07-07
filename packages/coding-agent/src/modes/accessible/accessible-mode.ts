@@ -13,6 +13,7 @@ import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { dispatchCommand } from "./commands.ts";
 import { createEventRenderer } from "./event-renderer.ts";
 import { createLineWriter } from "./line-writer.ts";
+import { isUnknownModel } from "./model-label.ts";
 import { createNodeReadlinePrompter } from "./prompter.ts";
 import { createTextUIContext } from "./text-ui-context.ts";
 import type { AccessibleModeOptions, LineWriter, Prompter } from "./types.ts";
@@ -34,7 +35,7 @@ export async function runAccessibleMode(
 ): Promise<number> {
 	const writer = deps.writer ?? createLineWriter();
 	const prompter = deps.prompter ?? createNodeReadlinePrompter();
-	const renderer = createEventRenderer(writer, { verbose: options.verbose });
+	const renderer = createEventRenderer(writer, { verbose: options.verbose, blockOutput: options.blockOutput });
 
 	let session = runtime.session;
 	let unsubscribe: (() => void) | undefined;
@@ -137,17 +138,19 @@ export async function runAccessibleMode(
 		renderer.endTurn();
 		if (interrupted) {
 			writer.line("[interrupted]");
-		} else {
-			writer.blank();
-			writer.line("[turn complete]");
 		}
+		// No end-of-turn marker: the next prompt (prefixed with a blank line) separates turns.
 	};
 
 	// --- banner + initial messages ------------------------------------------
 
 	const model = session.model;
 	writer.line(`Pi coding agent v${VERSION}`);
-	writer.line(`Model: ${model ? `${model.provider}/${model.id}` : "(none)"}   Thinking: ${session.thinkingLevel}`);
+	if (!model || isUnknownModel(model)) {
+		writer.line("No model selected. Use /login or /model to select a model.");
+	} else {
+		writer.line(`Model: ${model.provider}/${model.id}   Thinking: ${session.thinkingLevel}`);
+	}
 	writer.line(`Directory: ${runtime.cwd}`);
 	writer.line("Type your message and press Enter. Type /help for commands, /quit to exit.");
 
@@ -164,7 +167,7 @@ export async function runAccessibleMode(
 		while (exitCode === null) {
 			let line: string;
 			try {
-				line = await prompter.question("\n> ");
+				line = await prompter.question("\nΔ ");
 			} catch {
 				break; // input closed (EOF / Ctrl+D)
 			}
@@ -175,7 +178,14 @@ export async function runAccessibleMode(
 			if (trimmed === "") continue;
 
 			if (trimmed.startsWith("/")) {
-				const result = await dispatchCommand(trimmed, { session, runtime, writer, prompter, rebindSession });
+				const result = await dispatchCommand(trimmed, {
+					session,
+					runtime,
+					writer,
+					prompter,
+					renderer,
+					rebindSession,
+				});
 				if (result.kind === "exit") {
 					requestExit(result.code);
 					break;

@@ -18,7 +18,7 @@ garbled. The single rule for this mode: **only ever append plain text lines; nev
 | Decision | Choice |
 |---|---|
 | **Approach** | **Additive.** New `accessible` mode *beside* the TUI. `pi` keeps the TUI; `pi --accessible` gets the REPL. ~0 lines deleted. Can be promoted to default later. |
-| **Output streaming** | **Line-buffered streaming** of assistant text — emitted as it arrives but flushed only on newline/sentence boundaries (responsive without spamming TTS with partial tokens). **Model thinking is never shown** — fully suppressed to reduce clutter. |
+| **Output streaming** | **Line-buffered streaming** of assistant text by default — flushed on newline boundaries. An opt-in **block mode** (`--block-output` / `PI_BLOCK_OUTPUT` / `/stream block`) buffers each whole assistant message and emits it at once (some screen readers prefer this). **Model thinking is never shown** — fully suppressed to reduce clutter. |
 | **Tool output** | **Compact & summarized, never dumped.** Consecutive file tools (`read`/`edit`/…) are **grouped by type** onto one line each; `bash` shows its command (truncated if long) plus `ok`/`fail` and a **single** summary line. Full tool output is never printed. |
 | **v1 scope** | **Core loop + essentials.** prompt→response→loop, Ctrl+C to interrupt a running turn, and text commands: `/quit`, `/new`, `/model`, `/compact`, `/session` (+ `/help`). Extension `confirm`/`select`/`input` prompts rendered as text. Everything else deferred. |
 | **Activation** | `--accessible` flag, `PI_ACCESSIBLE=1` env, **and** auto-detect (`TERM=dumb`, `NO_TUI`, common screen-reader env signals). |
@@ -28,7 +28,13 @@ garbled. The single rule for this mode: **only ever append plain text lines; nev
 Implemented and verified on 2026-07-07:
 
 - **New mode** in `src/modes/accessible/`: `types.ts`, `line-writer.ts`, `prompter.ts`,
-  `event-renderer.ts`, `text-ui-context.ts`, `commands.ts`, `login.ts`, `accessible-mode.ts`.
+  `event-renderer.ts`, `text-ui-context.ts`, `commands.ts`, `login.ts`, `model-label.ts`,
+  `accessible-mode.ts`.
+- **Low-clutter output**: no `Assistant:` header, no `[turn complete]` marker, `Δ` (U+0394)
+  prompt, `/model` grouped by provider, token/TPS/cache status suppressed, and a
+  "No model selected. Use /login or /model" banner (accessible mode can start without a model).
+- **Streaming toggle**: `--block-output` / `PI_BLOCK_OUTPUT` / `/stream block|line` switches
+  between line-by-line and whole-message-block output (`renderer.setBlockOutput`).
 - **Auth**: `/login` (subscription/OAuth or API key) and `/logout` in `accessible/login.ts`,
   reusing `authStorage.login()` / `authStorage.set()` with readline-backed OAuth callbacks.
 - **CLI wiring**: `--accessible` (+ `--repl` / `--no-tui` aliases) in `args.ts` and help;
@@ -36,7 +42,7 @@ Implemented and verified on 2026-07-07:
   `accessibleRequested` (flag / `PI_ACCESSIBLE` / `NO_TUI` / `TERM=dumb`) + dispatch branch
   + stdout gate in `main.ts`; export in `modes/index.ts`.
 - **Docs**: `docs/accessible.md` (linked from `docs/docs.json`).
-- **Tests** (`test/accessible-*.test.ts`, 62 tests): line-writer (ANSI strip / no control
+- **Tests** (`test/accessible-*.test.ts`, 70 tests): line-writer (ANSI strip / no control
   bytes), event-renderer (grouping, bash summaries, thinking suppressed, no-ANSI invariant),
   text-ui-context, commands, login (API-key + OAuth callbacks + logout), CLI wiring (arg
   parsing + `resolveAppMode` truth table), and an end-to-end loop test (real `AgentSession`
@@ -136,7 +142,7 @@ Loop outline:
 2. Print a short, screen-reader-friendly banner: app + version, active model, cwd, and
    "Type your message and press Enter. Type /help for commands, /quit to exit."
 3. If `initialMessage` / `initialMessages` present, run them through the same submit path before prompting.
-4. `rl.prompt()` with a stable, minimal prompt string (e.g. `"> "`). On each submitted line:
+4. `rl.prompt()` with a stable, minimal prompt string (`"Δ "`, U+0394). On each submitted line:
    - Empty line → reprompt.
    - Starts with `/` → dispatch via `commands.ts` (see §4). Unknown `/x` that matches an extension
      command → `session.prompt(text)` (extensions consume slash input via prompt, per
@@ -181,8 +187,7 @@ Rendering rules (all plain text, labeled prefixes — no color-only meaning, no 
 
 | Event | Output |
 |---|---|
-| first assistant text of a message | `Assistant:` header (once per assistant message) |
-| `text_delta` | append to line buffer; flush completed lines |
+| `text_delta` | append to line buffer; flush completed lines (no `Assistant:` header — printed directly) |
 | `text_end` / `message_end` | flush remaining buffer |
 | `thinking_*` | **ignored — never emitted** |
 | file tools run (`read`/`edit`/`write`/`ls`/`grep`/`find`), grouped on flush | one line per category listing files/targets, e.g. `» read: args.ts, main.ts, sdk.ts` and `» edit: args.ts (1), main.ts (2)` (the count = replacements/edits). A **failed** file op breaks out of the group onto its own line: `» edit: args.ts — failed: <message>`. |
@@ -190,7 +195,7 @@ Rendering rules (all plain text, labeled prefixes — no color-only meaning, no 
 | `bash` end (ok) | `  ✓ bash ok — <single summary line>` where the summary = last non-empty stdout line, ANSI-stripped, truncated. Omit the ` — …` if there is no output. **Full output is never printed.** |
 | `bash` end (fail) | `  ✗ bash failed (exit <code>) — <single line>` (last stderr/stdout line or error message, truncated) |
 | other one-off tool end | `» <name>: <short one-line result or ok/fail>` |
-| turn resolves (`prompt()` returns) | flush pending group + buffer, blank line + `[turn complete]`, then reprompt |
+| turn resolves (`prompt()` returns) | flush pending group + buffer, then reprompt (no end-of-turn marker; the `Δ` prompt, prefixed with a blank line, separates turns) |
 | `compaction_start/end` | `[compacting context…]` / `[context compacted] N → M tokens` |
 | `auto_retry_start` | `[retrying (attempt n/m) after error: …]` |
 | `message error` / `done reason=error` | `Error: <message>` (to stderr) |
@@ -215,7 +220,7 @@ the three interactive methods with readline prompts instead of JSON round-trips:
 - `confirm(title, message)` → print, read `[y/N]`, return boolean.
 - `input(title, placeholder)` → print title, read a line, return it (empty → cancelled).
 - `notify(message, type)` → print `Note:` / `Warning:` / `Error:` prefixed line.
-- `setStatus`, `setTitle` → optional single-line prints or no-ops.
+- `setStatus`, `setTitle` → **no-ops**. Status is footer chrome (token/TPS/cache counters, git branch); it updates constantly and is pure clutter for a screen reader.
 - **TUI-only methods** (`setWidget`, `setFooter`, `setHeader`, `setWorkingMessage`,
   `setWorkingVisible`, `setWorkingIndicator`, `setHiddenThinkingLabel`, `custom`,
   `addAutocompleteProvider`, `setEditorComponent`, editor/theme getters) → **no-ops / safe defaults**,
@@ -239,6 +244,7 @@ v1 dispatch table (parse `/name [args]`):
 | `/model [pattern]` | No arg → print current + list available (`session.modelRegistry.getAvailable()`), read a number to pick, `session.setModel()`. With arg → resolve + set. (Text selector; not the TUI selector.) |
 | `/compact [instructions]` | `session.compact(instructions)`; announce result. |
 | `/session` | Print `session.getSessionStats()` / `get_state` fields as labeled lines (model, thinking, message count, session id/name, file). |
+| `/stream [block\|line]` | Show or toggle streaming mode via `renderer.setBlockOutput()`. |
 | unknown `/x` matching an extension command | fall through to `session.prompt(text)`. |
 | other unknown | `Unknown command: /x. Type /help.` |
 

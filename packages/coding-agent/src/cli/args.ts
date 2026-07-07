@@ -36,6 +36,7 @@ export interface Args {
 	noExtensions?: boolean;
 	print?: boolean;
 	accessible?: boolean;
+	blockOutput?: boolean;
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
@@ -147,6 +148,8 @@ export function parseArgs(args: string[]): Args {
 			}
 		} else if (arg === "--accessible" || arg === "--repl" || arg === "--no-tui") {
 			result.accessible = true;
+		} else if (arg === "--block-output") {
+			result.blockOutput = true;
 		} else if (arg === "--export" && i + 1 < args.length) {
 			result.export = args[++i];
 		} else if ((arg === "--extension" || arg === "-e") && i + 1 < args.length) {
@@ -246,6 +249,7 @@ ${chalk.bold("Options:")}
   --mode <mode>                  Output mode: text (default), json, or rpc
   --print, -p                    Non-interactive mode: process prompt and exit
   --accessible                   Plain screen-reader-friendly REPL (no TUI); also PI_ACCESSIBLE=1
+  --block-output                 Accessible mode: emit each reply as one block (also PI_BLOCK_OUTPUT=1, /stream)
   --continue, -c                 Continue previous session
   --resume, -r                   Select a session to resume
   --session <path|id>            Use specific session file or partial UUID

@@ -29,13 +29,56 @@ describe("runAccessibleMode (end to end)", () => {
 		expect(code).toBe(0);
 		const transcript = rec.lines.join("\n");
 		expect(rec.lines[0].startsWith("Pi coding agent v")).toBe(true);
-		expect(rec.lines).toContain("Assistant:");
 		expect(transcript).toContain("Hello there");
-		expect(rec.lines).toContain("[turn complete]");
+		// No "Assistant:" header and no end-of-turn marker (removed as clutter).
+		expect(transcript).not.toContain("Assistant:");
+		expect(transcript).not.toContain("[turn complete]");
 		// Append-only: never an escape byte.
 		expect(transcript).not.toContain(String.fromCharCode(27));
 
 		harness.cleanup();
+	});
+
+	it("block-output mode emits a multi-line reply as a single block", async () => {
+		const harness = createHarness({ responses: ["line one\nline two"] });
+		const runtime = {
+			session: harness.session,
+			cwd: harness.tempDir,
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setRebindSession: vi.fn(),
+			newSession: vi.fn().mockResolvedValue({ cancelled: false }),
+			fork: vi.fn().mockResolvedValue({ cancelled: false }),
+			switchSession: vi.fn().mockResolvedValue({ cancelled: false }),
+		} as unknown as AgentSessionRuntime;
+
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(["hi", "/quit"]);
+		const code = await runAccessibleMode(
+			runtime,
+			{ blockOutput: true },
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		expect(code).toBe(0);
+		// The two lines arrive as one recorded write, not two separate line flushes.
+		expect(rec.lines).toContain("line one\nline two");
+		harness.cleanup();
+	});
+
+	it("shows the no-model banner and uses the Δ prompt", async () => {
+		const { runtime } = makeStubRuntime({ model: undefined });
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(["/quit"]);
+
+		const code = await runAccessibleMode(
+			runtime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		expect(code).toBe(0);
+		expect(rec.lines).toContain("No model selected. Use /login or /model to select a model.");
+		expect(fake.prompts.some((prompt) => prompt.includes("Δ"))).toBe(true);
 	});
 });
 

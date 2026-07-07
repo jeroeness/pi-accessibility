@@ -62,7 +62,7 @@ function render(events: AgentSessionEvent[]): string[] {
 // --- tests -----------------------------------------------------------------
 
 describe("assistant text", () => {
-	it("prints an Assistant header once and flushes complete lines across chunk boundaries", () => {
+	it("flushes complete lines across chunk boundaries (no header)", () => {
 		const lines = render([
 			textStart(),
 			textDelta("Hel"),
@@ -71,19 +71,19 @@ describe("assistant text", () => {
 			textDelta("second line\n"),
 			textEnd(),
 		]);
-		expect(lines).toEqual(["Assistant:", "Hello world", "second line"]);
+		expect(lines).toEqual(["Hello world", "second line"]);
 	});
 
 	it("flushes a trailing partial line at end of message", () => {
 		const lines = render([textStart(), textDelta("no newline here"), textEnd()]);
-		expect(lines).toEqual(["Assistant:", "no newline here"]);
+		expect(lines).toEqual(["no newline here"]);
 	});
 });
 
 describe("thinking", () => {
 	it("emits nothing for thinking deltas", () => {
 		const lines = render([textStart(), thinkingDelta("secret reasoning"), textDelta("visible\n"), textEnd()]);
-		expect(lines).toEqual(["Assistant:", "visible"]);
+		expect(lines).toEqual(["visible"]);
 		expect(lines.join("\n")).not.toContain("secret");
 	});
 });
@@ -131,7 +131,7 @@ describe("file tool grouping", () => {
 			textDelta("done\n"),
 			textEnd(),
 		]);
-		expect(lines).toEqual(["» read: a.ts", "Assistant:", "done"]);
+		expect(lines).toEqual(["» read: a.ts", "done"]);
 	});
 });
 
@@ -167,6 +167,33 @@ describe("bash", () => {
 			toolEnd("1", "bash", textResult(`${ESC}[32mhi${ESC}[0m`)),
 		]);
 		expect(lines).toEqual(["» bash: echo hi", "  ✓ bash ok — hi"]);
+	});
+});
+
+describe("block streaming", () => {
+	it("buffers the whole message and emits it as one block on message end", () => {
+		const rec = createRecordingWriter();
+		const renderer = createEventRenderer(rec.writer, { blockOutput: true });
+		renderer.handle(textStart());
+		renderer.handle(textDelta("Hello world\n"));
+		renderer.handle(textDelta("second line\n"));
+		// Nothing is emitted mid-stream in block mode.
+		expect(rec.lines).toEqual([]);
+		renderer.handle(textEnd());
+		// One write containing the whole message (trailing blank line trimmed).
+		expect(rec.lines).toEqual(["Hello world\nsecond line"]);
+	});
+
+	it("can be toggled on at runtime", () => {
+		const rec = createRecordingWriter();
+		const renderer = createEventRenderer(rec.writer); // starts in line mode
+		renderer.setBlockOutput(true);
+		expect(renderer.getBlockOutput()).toBe(true);
+		renderer.handle(textStart());
+		renderer.handle(textDelta("a\nb\n"));
+		expect(rec.lines).toEqual([]);
+		renderer.endTurn();
+		expect(rec.lines).toEqual(["a\nb"]);
 	});
 });
 

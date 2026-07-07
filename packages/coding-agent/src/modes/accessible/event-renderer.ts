@@ -24,6 +24,8 @@ const MAX_SUMMARY = 100;
 export interface EventRendererOptions {
 	/** Reserved for future diagnostics; never surfaces model thinking. */
 	verbose?: boolean;
+	/** Start in block-streaming mode (buffer whole assistant messages). */
+	blockOutput?: boolean;
 }
 
 interface FileEntry {
@@ -32,15 +34,24 @@ interface FileEntry {
 }
 
 class AccessibleEventRenderer implements EventRenderer {
-	private headerShown = false;
 	private textBuf = "";
 	private fileRun: FileEntry[] = [];
 	/** toolCallId -> display label captured at tool start (args are not on the end event). */
 	private readonly pendingFileLabels = new Map<string, string>();
 	private readonly writer: LineWriter;
+	private blockOutput: boolean;
 
-	constructor(writer: LineWriter) {
+	constructor(writer: LineWriter, blockOutput: boolean) {
 		this.writer = writer;
+		this.blockOutput = blockOutput;
+	}
+
+	setBlockOutput(enabled: boolean): void {
+		this.blockOutput = enabled;
+	}
+
+	getBlockOutput(): boolean {
+		return this.blockOutput;
 	}
 
 	handle(event: AgentSessionEvent): void {
@@ -95,9 +106,8 @@ class AccessibleEventRenderer implements EventRenderer {
 	private handleAssistantEvent(event: AssistantMessageEvent): void {
 		switch (event.type) {
 			case "start":
-				// A new assistant message begins; the next text delta re-prints the header.
+				// A new assistant message begins; flush any leftover text from the previous one.
 				this.flushText();
-				this.headerShown = false;
 				break;
 			case "text_delta":
 				this.appendText(event.delta);
@@ -119,8 +129,13 @@ class AccessibleEventRenderer implements EventRenderer {
 	}
 
 	private appendText(delta: string): void {
-		this.ensureHeader();
+		// Assistant text follows any pending tool group, in reading order.
+		this.flushFileRun();
 		this.textBuf += delta;
+		// Block mode: hold the whole message; flushText emits it at once on message end.
+		if (this.blockOutput) {
+			return;
+		}
 		let newlineIndex = this.textBuf.indexOf("\n");
 		while (newlineIndex !== -1) {
 			this.writer.line(this.textBuf.slice(0, newlineIndex));
@@ -135,17 +150,14 @@ class AccessibleEventRenderer implements EventRenderer {
 	}
 
 	private flushText(): void {
-		if (this.textBuf.length > 0) {
-			this.writer.line(this.textBuf);
-			this.textBuf = "";
+		if (this.textBuf.length === 0) {
+			return;
 		}
-	}
-
-	private ensureHeader(): void {
-		this.flushFileRun();
-		if (!this.headerShown) {
-			this.writer.line("Assistant:");
-			this.headerShown = true;
+		// Emit the buffer as one write (a whole block in block mode); drop trailing blank lines.
+		const text = this.textBuf.replace(/\n+$/, "");
+		this.textBuf = "";
+		if (text.length > 0) {
+			this.writer.line(text);
 		}
 	}
 
@@ -330,7 +342,7 @@ function exitCodeOf(result: unknown): number | undefined {
 	return undefined;
 }
 
-export function createEventRenderer(writer: LineWriter, _options: EventRendererOptions = {}): EventRenderer {
-	// _options is reserved for future diagnostics; the renderer never surfaces model thinking.
-	return new AccessibleEventRenderer(writer);
+export function createEventRenderer(writer: LineWriter, options: EventRendererOptions = {}): EventRenderer {
+	// `verbose` is reserved for future diagnostics; the renderer never surfaces model thinking.
+	return new AccessibleEventRenderer(writer, options.blockOutput ?? false);
 }

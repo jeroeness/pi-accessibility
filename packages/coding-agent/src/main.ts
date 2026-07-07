@@ -819,7 +819,10 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("createAgentSession");
 
-	if (appMode !== "interactive" && !session.model) {
+	// Accessible mode, like interactive, can start without a model: it shows a
+	// "No model selected" banner and lets the user run /login or /model. The one-shot
+	// print/rpc/json modes still require a model up front.
+	if (appMode !== "interactive" && appMode !== "accessible" && !session.model) {
 		console.error(chalk.red(formatNoModelsAvailableMessage()));
 		process.exit(1);
 	}
@@ -870,6 +873,7 @@ export async function main(args: string[], options?: MainOptions) {
 			initialImages,
 			initialMessages: parsed.messages,
 			verbose: parsed.verbose,
+			blockOutput: parsed.blockOutput || isTruthyEnvFlag(process.env.PI_BLOCK_OUTPUT),
 		});
 		stopThemeWatcher();
 		if (exitCode !== 0) {

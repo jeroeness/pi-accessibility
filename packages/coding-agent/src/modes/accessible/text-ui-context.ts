@@ -105,10 +105,9 @@ export function createTextUIContext(prompter: Prompter, writer: LineWriter): Ext
 			return () => {};
 		},
 
-		setStatus(key: string, text: string | undefined): void {
-			if (text) {
-				writer.line(`[${key}: ${text}]`);
-			}
+		setStatus(_key: string, _text: string | undefined): void {
+			// Status is footer chrome (token/TPS counters, git branch, …). It updates constantly
+			// and is pure clutter for a screen reader, so it is dropped in accessible mode.
 		},
 
 		setTitle(_title: string): void {
