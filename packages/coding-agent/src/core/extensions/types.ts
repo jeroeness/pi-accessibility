@@ -297,7 +297,7 @@ export interface CompactOptions {
 /**
  * Context passed to extension event handlers.
  */
-export type ExtensionMode = "tui" | "rpc" | "json" | "print";
+export type ExtensionMode = "tui" | "rpc" | "json" | "print" | "accessible";
 
 export interface ExtensionContext {
 	/** UI methods for user interaction */

@@ -43,7 +43,7 @@ import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
-import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
+import { InteractiveMode, runAccessibleMode, runPrintMode, runRpcMode } from "./modes/index.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
@@ -97,7 +97,29 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
-function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
+/**
+ * True when the user asked for (or the environment implies) the plain
+ * screen-reader-friendly REPL. The explicit flag / PI_ACCESSIBLE always win;
+ * TERM=dumb and NO_TUI are treated as accessible signals. Kept in one place so
+ * the heuristics are easy to audit and tune.
+ */
+export function accessibleRequested(parsed: Args): boolean {
+	if (parsed.accessible) {
+		return true;
+	}
+	if (isTruthyEnvFlag(process.env.PI_ACCESSIBLE)) {
+		return true;
+	}
+	if (isTruthyEnvFlag(process.env.NO_TUI)) {
+		return true;
+	}
+	if (process.env.TERM === "dumb") {
+		return true;
+	}
+	return false;
+}
+
+export function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
 	if (parsed.mode === "rpc") {
 		return "rpc";
 	}
@@ -106,6 +128,9 @@ function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean)
 	}
 	if (parsed.print || !stdinIsTTY || !stdoutIsTTY) {
 		return "print";
+	}
+	if (accessibleRequested(parsed)) {
+		return "accessible";
 	}
 	return "interactive";
 }
@@ -532,7 +557,9 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
-	const shouldTakeOverStdout = appMode !== "interactive" && !isPlainRuntimeMetadataCommand(parsed);
+	// Accessible mode lets readline own the TTY, so it must not take over stdout.
+	const shouldTakeOverStdout =
+		appMode !== "interactive" && appMode !== "accessible" && !isPlainRuntimeMetadataCommand(parsed);
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
 	}
@@ -836,6 +863,19 @@ export async function main(args: string[], options?: MainOptions) {
 
 		printTimings();
 		await interactiveMode.run();
+	} else if (appMode === "accessible") {
+		printTimings();
+		const exitCode = await runAccessibleMode(runtime, {
+			initialMessage,
+			initialImages,
+			initialMessages: parsed.messages,
+			verbose: parsed.verbose,
+		});
+		stopThemeWatcher();
+		if (exitCode !== 0) {
+			process.exitCode = exitCode;
+		}
+		return;
 	} else {
 		printTimings();
 		const exitCode = await runPrintMode(runtime, {

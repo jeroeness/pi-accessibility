@@ -36,6 +36,10 @@
           "path": "keybindings.md"
         },
         {
+          "title": "Accessible Mode",
+          "path": "accessible.md"
+        },
+        {
           "title": "Sessions",
           "path": "sessions.md"
         },
