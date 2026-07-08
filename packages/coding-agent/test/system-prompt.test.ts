@@ -125,10 +125,10 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).toContain("<screen_reader_output>");
 			expect(prompt).toContain("read aloud by a screen reader");
 			expect(prompt).toContain("No markdown");
-			expect(prompt).toContain("No emojis or decorative symbols");
+			expect(prompt).toContain("emojis, or decorative symbols");
 			expect(prompt).toContain("No tables, ASCII art");
-			expect(prompt).toContain("numbered lists instead of bullet points");
-			expect(prompt).toContain("no code fence markers");
+			expect(prompt).toContain("numbered lists over bullets");
+			expect(prompt).toContain("no fences");
 		});
 
 		test("appends screen reader output rules even when a custom prompt is supplied", () => {
@@ -143,7 +143,7 @@ describe("buildSystemPrompt", () => {
 
 			expect(prompt).toContain("You are a specialized assistant.");
 			expect(prompt).toContain("<screen_reader_output>");
-			expect(prompt).toContain("No emojis or decorative symbols");
+			expect(prompt).toContain("emojis, or decorative symbols");
 		});
 
 		test("does not include screen reader output rules for other modes", () => {
