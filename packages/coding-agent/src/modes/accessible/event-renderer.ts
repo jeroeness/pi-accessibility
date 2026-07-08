@@ -4,11 +4,13 @@
  * Design (see PLAN-ACCESSIBILITY.md §2):
  * - Assistant text is line-buffered: deltas accumulate and flush on newline / size cap.
  * - Model thinking is dropped entirely (no tokens, no marker).
- * - Consecutive file tools (read/edit/write/ls/grep/find) are grouped by type: one
- *   line per tool name, e.g. `» read: a.ts, b.ts` then `» edit: a.ts (1)`.
- * - bash is grouped by (first command word + status): a run renders one line per
- *   distinct word, e.g. `bash grep ok`, `bash grep (5) ok`, or `bash npm failed`.
- *   The command arguments and the full output are never printed.
+ * - Consecutive file tools (read/edit/write/ls/grep/find) are grouped by type and
+ *   accumulate across agent steps until the run is broken by assistant text, a
+ *   different tool category, or the turn ending. Repeated targets collapse to one
+ *   entry with a count: `» read: a.ts (2), b.ts` then `» edit: c.ts`.
+ * - bash is grouped by (first command word + status), also across steps: a run
+ *   renders one line per distinct word, e.g. `bash grep ok`, `bash grep (5) ok`,
+ *   or `bash npm failed`. The command arguments and the full output are never printed.
  */
 
 import { basename } from "node:path";
@@ -78,8 +80,11 @@ class AccessibleEventRenderer implements EventRenderer {
 				break;
 			case "turn_end":
 			case "agent_end":
-				this.flushBashRun();
-				this.flushFileRun();
+				// Tool runs are NOT flushed at per-step boundaries: they accumulate across
+				// steps so repeated calls collapse into one counted line (e.g. `bash find (2)
+				// ok`). They flush when broken by assistant text, a different tool category,
+				// or endTurn() when the whole prompt resolves. Text is already flushed by
+				// message_end; this is a harmless safety net for any trailing buffer.
 				this.flushText();
 				break;
 			case "compaction_start":
@@ -205,8 +210,8 @@ class AccessibleEventRenderer implements EventRenderer {
 			if (isError) {
 				this.flushBashRun();
 				this.flushFileRun();
-				const message = lastNonEmptyLine(extractResultText(result)) || "failed";
-				this.writer.line(`» ${toolName}: ${label} — failed: ${truncateLine(message, MAX_SUMMARY)}`);
+				// Minimal failure line: no `»`, no status code, no error text.
+				this.writer.line(`${toolName}: ${label} failed`);
 			} else {
 				this.fileRun.push({ tool: toolName, label });
 			}
@@ -214,8 +219,7 @@ class AccessibleEventRenderer implements EventRenderer {
 		}
 		// Other one-off tool.
 		if (isError) {
-			const message = lastNonEmptyLine(extractResultText(result)) || "error";
-			this.writer.line(`» ${toolName}: failed — ${truncateLine(message, MAX_SUMMARY)}`);
+			this.writer.line(`${toolName}: failed`);
 		} else {
 			const summary = lastNonEmptyLine(extractResultText(result));
 			this.writer.line(`» ${toolName}: ${summary ? truncateLine(summary, MAX_SUMMARY) : "ok"}`);
@@ -250,19 +254,29 @@ class AccessibleEventRenderer implements EventRenderer {
 		if (this.fileRun.length === 0) {
 			return;
 		}
-		const order: string[] = [];
-		const byTool = new Map<string, string[]>();
+		// Group by tool (first-seen order), and within each tool collapse repeated
+		// targets to one entry with a `(count)` suffix — again in first-seen order.
+		const toolOrder: string[] = [];
+		const byTool = new Map<string, { order: string[]; counts: Map<string, number> }>();
 		for (const entry of this.fileRun) {
-			let labels = byTool.get(entry.tool);
-			if (!labels) {
-				labels = [];
-				byTool.set(entry.tool, labels);
-				order.push(entry.tool);
+			let group = byTool.get(entry.tool);
+			if (!group) {
+				group = { order: [], counts: new Map() };
+				byTool.set(entry.tool, group);
+				toolOrder.push(entry.tool);
 			}
-			labels.push(entry.label);
+			if (!group.counts.has(entry.label)) {
+				group.order.push(entry.label);
+			}
+			group.counts.set(entry.label, (group.counts.get(entry.label) ?? 0) + 1);
 		}
-		for (const tool of order) {
-			this.writer.line(`» ${tool}: ${byTool.get(tool)?.join(", ")}`);
+		for (const tool of toolOrder) {
+			const group = byTool.get(tool)!;
+			const parts = group.order.map((label) => {
+				const count = group.counts.get(label)!;
+				return count > 1 ? `${label} (${count})` : label;
+			});
+			this.writer.line(`» ${tool}: ${parts.join(", ")}`);
 		}
 		this.fileRun = [];
 	}
@@ -325,18 +339,9 @@ function fileLabel(toolName: string, argsValue: unknown): string {
 	if (!path) {
 		return toolName;
 	}
-	const name = basename(path) || path;
-	if (toolName === "edit") {
-		return `${name} (${editCount(argsRecord)})`;
-	}
-	return name;
-}
-
-function editCount(argsRecord: Record<string, unknown> | undefined): number {
-	if (argsRecord && Array.isArray(argsRecord.edits)) {
-		return argsRecord.edits.length;
-	}
-	return 1;
+	// The `(count)` suffix is added at flush time and means "times this file was
+	// touched", uniformly across file tools — including edit.
+	return basename(path) || path;
 }
 
 /** Best-effort extraction of a tool result's text (AgentToolResult content, or common shapes). */

@@ -44,6 +44,9 @@ function textResult(text: string, extra: Record<string, unknown> = {}): unknown 
 function toolEnd(toolCallId: string, toolName: string, result: unknown, isError = false): AgentSessionEvent {
 	return { type: "tool_execution_end", toolCallId, toolName, result, isError } as unknown as AgentSessionEvent;
 }
+function turnEnd(): AgentSessionEvent {
+	return { type: "turn_end", message: {}, toolResults: [] } as unknown as AgentSessionEvent;
+}
 
 function render(events: AgentSessionEvent[]): string[] {
 	const rec = createRecordingWriter();
@@ -98,7 +101,42 @@ describe("file tool grouping", () => {
 			toolStart("3", "edit", { path: "src/args.ts", edits: [{ oldText: "a", newText: "b" }] }),
 			toolEnd("3", "edit", textResult("ok")),
 		]);
-		expect(lines).toEqual(["» read: args.ts, main.ts", "» edit: args.ts (1)"]);
+		expect(lines).toEqual(["» read: args.ts, main.ts", "» edit: args.ts"]);
+	});
+
+	it("collapses repeated targets within a group to one counted entry", () => {
+		const lines = render([
+			toolStart("1", "read", { path: "src/a.ts" }),
+			toolEnd("1", "read", textResult("...")),
+			toolStart("2", "read", { path: "src/a.ts" }),
+			toolEnd("2", "read", textResult("...")),
+			toolStart("3", "read", { path: "src/b.ts" }),
+			toolEnd("3", "read", textResult("...")),
+		]);
+		expect(lines).toEqual(["» read: a.ts (2), b.ts"]);
+	});
+
+	it("counts repeated edits to the same file (uniform times-touched count)", () => {
+		const lines = render([
+			toolStart("1", "edit", { path: "src/a.ts", edits: [{ oldText: "x", newText: "y" }] }),
+			toolEnd("1", "edit", textResult("ok")),
+			toolStart("2", "edit", { path: "src/a.ts", edits: [{ oldText: "p", newText: "q" }] }),
+			toolEnd("2", "edit", textResult("ok")),
+		]);
+		expect(lines).toEqual(["» edit: a.ts (2)"]);
+	});
+
+	it("does not merge across assistant text (reading order preserved)", () => {
+		const lines = render([
+			toolStart("1", "read", { path: "a.ts" }),
+			toolEnd("1", "read", textResult("...")),
+			textStart(),
+			textDelta("looking\n"),
+			textEnd(),
+			toolStart("2", "read", { path: "a.ts" }),
+			toolEnd("2", "read", textResult("...")),
+		]);
+		expect(lines).toEqual(["» read: a.ts", "looking", "» read: a.ts"]);
 	});
 
 	it("breaks the group at a bash call (read, bash, read -> three groups)", () => {
@@ -113,14 +151,14 @@ describe("file tool grouping", () => {
 		expect(lines).toEqual(["» read: a.ts", "bash ls ok", "» read: b.ts"]);
 	});
 
-	it("breaks a failed file op out of the group onto its own line", () => {
+	it("breaks a failed file op out of the group onto its own minimal line (no status or message)", () => {
 		const lines = render([
 			toolStart("1", "read", { path: "a.ts" }),
 			toolEnd("1", "read", textResult("...")),
-			toolStart("2", "read", { path: "missing.ts" }),
-			toolEnd("2", "read", textResult("no such file 'missing.ts'"), true),
+			toolStart("2", "read", { path: "pi" }),
+			toolEnd("2", "read", textResult("EISDIR: illegal operation on a directory, read"), true),
 		]);
-		expect(lines).toEqual(["» read: a.ts", "» read: missing.ts — failed: no such file 'missing.ts'"]);
+		expect(lines).toEqual(["» read: a.ts", "read: pi failed"]);
 	});
 
 	it("flushes the group before assistant text", () => {
@@ -161,6 +199,28 @@ describe("bash", () => {
 		expect(render(events)).toEqual(["bash grep (5) ok"]);
 	});
 
+	it("groups repeated tool calls across agent steps into counted lines", () => {
+		// Each agent step ends with turn_end; tool runs must accumulate across them
+		// so separate-step duplicates collapse instead of printing one line per step.
+		const lines = render([
+			toolStart("1", "bash", { command: "find . -name x" }),
+			toolEnd("1", "bash", textResult("...")),
+			turnEnd(),
+			toolStart("2", "bash", { command: "find . -name y" }),
+			toolEnd("2", "bash", textResult("...")),
+			turnEnd(),
+			toolStart("3", "read", { path: "src/system-prompt.ts" }),
+			toolEnd("3", "read", textResult("...")),
+			turnEnd(),
+			toolStart("4", "read", { path: "src/system-prompt.ts" }),
+			toolEnd("4", "read", textResult("...")),
+			toolStart("5", "read", { path: "src/prompt-templates.ts" }),
+			toolEnd("5", "read", textResult("...")),
+			turnEnd(),
+		]);
+		expect(lines).toEqual(["bash find (2) ok", "» read: system-prompt.ts (2), prompt-templates.ts"]);
+	});
+
 	it("splits ok and failed of the same command into separate lines within a run", () => {
 		const lines = render([
 			toolStart("1", "bash", { command: "grep a" }),
@@ -171,6 +231,16 @@ describe("bash", () => {
 			toolEnd("3", "bash", textResult("...")),
 		]);
 		expect(lines).toEqual(["bash grep (2) ok", "bash grep failed"]);
+	});
+});
+
+describe("other one-off tools", () => {
+	it("renders a failure minimally, without the error message", () => {
+		const lines = render([
+			toolStart("1", "webfetch", { url: "https://x" }),
+			toolEnd("1", "webfetch", textResult("403 Forbidden"), true),
+		]);
+		expect(lines).toEqual(["webfetch: failed"]);
 	});
 });
 

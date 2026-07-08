@@ -145,13 +145,15 @@ describe("/compact and /session and /new", () => {
 		expect(rec.lines.some((l) => l.startsWith("Messages: 3"))).toBe(true);
 	});
 
-	it("/new creates a session and rebinds", async () => {
+	it("/new creates a session and rebinds without announcing the session id", async () => {
 		const newSession = vi.fn().mockResolvedValue({ cancelled: false });
 		const rebindSession = vi.fn().mockResolvedValue(undefined);
-		const { ctx } = makeCtx({ newSession, rebindSession });
+		const { ctx, rec } = makeCtx({ newSession, rebindSession });
 		expect(await dispatchCommand("/new", ctx)).toEqual({ kind: "handled" });
 		expect(newSession).toHaveBeenCalled();
 		expect(rebindSession).toHaveBeenCalled();
+		expect(rec.lines).toEqual(["Started a new session."]);
+		expect(rec.lines.join("\n")).not.toContain("sess-1");
 	});
 });
 

@@ -11,19 +11,20 @@ import { runLogin, runLogout } from "./login.ts";
 import { modelLabel } from "./model-label.ts";
 import type { CommandContext, CommandResult } from "./types.ts";
 
-const HELP_LINES = [
-	"Commands:",
-	"  /help              Show this help",
-	"  /login             Sign in (subscription or API key)",
-	"  /logout            Remove a stored credential",
-	"  /model [pattern]   Show or switch the active model",
-	"  /compact [notes]   Summarize and shrink the conversation context",
-	"  /session           Show session info and stats",
-	"  /stream [block|line] Show or set how replies stream (block = whole message at once)",
-	"  /new               Start a fresh session",
-	"  /quit  (or Ctrl+D) Exit",
-	"Type anything else to send it to the agent. Ctrl+C interrupts a running turn.",
-];
+const COMMAND_HELP: Record<string, string> = {
+	help: "/help [command]. Show available commands, or explain a specific command.",
+	login: "/login. Sign in with a subscription or API key.",
+	logout: "/logout. Remove a stored credential.",
+	model: "/model [pattern]. Show or switch the active model. Without a pattern, lists all available models and prompts for a selection.",
+	compact: "/compact [notes]. Summarize and shrink the conversation context. Optional notes guide the summary.",
+	session: "/session. Show session info and stats including model, token counts, and message totals.",
+	stream:
+		"/stream [block|line]. Show or set how replies stream. Block emits the whole reply at once; line streams line by line.",
+	new: "/new. Start a fresh session.",
+	quit: "/quit (or Ctrl+D). Exit.",
+};
+
+const COMMANDS_SUMMARY = `/help /login /logout /model /compact /session /stream /new /quit`;
 
 /**
  * Dispatch a submitted line. Returns `sendAsPrompt` for non-commands and for
@@ -41,8 +42,12 @@ export async function dispatchCommand(line: string, ctx: CommandContext): Promis
 
 	switch (name) {
 		case "help":
-			for (const helpLine of HELP_LINES) {
-				ctx.writer.line(helpLine);
+			if (rest && COMMAND_HELP[rest.toLowerCase()]) {
+				ctx.writer.line(COMMAND_HELP[rest.toLowerCase()]);
+			} else if (rest) {
+				ctx.writer.line(`Unknown command: /${rest}. ${COMMANDS_SUMMARY}`);
+			} else {
+				ctx.writer.line(COMMANDS_SUMMARY);
 			}
 			return { kind: "handled" };
 
@@ -95,8 +100,8 @@ async function handleNew(ctx: CommandContext): Promise<void> {
 		return;
 	}
 	await ctx.rebindSession();
-	// The session was replaced; read the id from the runtime, not the stale ctx.session.
-	ctx.writer.line(`Started a new session (${ctx.runtime.session.sessionId}).`);
+	// The session id (a UUID) is noise for a screen reader, so it is not announced.
+	ctx.writer.line("Started a new session.");
 }
 
 async function handleModel(ctx: CommandContext, pattern: string): Promise<void> {

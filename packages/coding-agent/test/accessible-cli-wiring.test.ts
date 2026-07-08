@@ -1,18 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseArgs } from "../src/cli/args.ts";
-import { accessibleRequested, resolveAppMode } from "../src/main.ts";
+import { accessibleRequested, resolveAppMode, tuiRequested } from "../src/main.ts";
 
-const ENV_KEYS = ["PI_ACCESSIBLE", "NO_TUI", "TERM"] as const;
+const ENV_KEYS = ["PI_ACCESSIBLE", "NO_TUI", "TERM", "PI_TUI", "PI_LINE_OUTPUT"] as const;
 
-describe("parseArgs --accessible", () => {
+describe("parseArgs --accessible / --tui / --line-output", () => {
 	it("sets accessible for --accessible / --repl / --no-tui", () => {
 		expect(parseArgs(["--accessible"]).accessible).toBe(true);
 		expect(parseArgs(["--repl"]).accessible).toBe(true);
 		expect(parseArgs(["--no-tui"]).accessible).toBe(true);
 	});
 
-	it("leaves accessible undefined by default", () => {
-		expect(parseArgs([]).accessible).toBeUndefined();
+	it("sets tui for --tui and lineOutput for --line-output", () => {
+		expect(parseArgs(["--tui"]).tui).toBe(true);
+		expect(parseArgs(["--line-output"]).lineOutput).toBe(true);
+	});
+
+	it("leaves accessible / tui / lineOutput undefined by default", () => {
+		const parsed = parseArgs([]);
+		expect(parsed.accessible).toBeUndefined();
+		expect(parsed.tui).toBeUndefined();
+		expect(parsed.lineOutput).toBeUndefined();
 	});
 });
 
@@ -67,14 +75,43 @@ describe("accessible environment detection", () => {
 			expect(resolveAppMode(parseArgs(["--accessible"]), false, true)).toBe("print");
 		});
 
-		it("accessible when requested with a TTY", () => {
+		it("accessible by default with a TTY", () => {
+			expect(resolveAppMode(parseArgs([]), true, true)).toBe("accessible");
 			expect(resolveAppMode(parseArgs(["--accessible"]), true, true)).toBe("accessible");
 			process.env.TERM = "dumb";
 			expect(resolveAppMode(parseArgs([]), true, true)).toBe("accessible");
 		});
 
-		it("interactive by default with a TTY", () => {
+		it("interactive (TUI) only when opted in with --tui / PI_TUI on a TTY", () => {
+			expect(resolveAppMode(parseArgs(["--tui"]), true, true)).toBe("interactive");
+			process.env.PI_TUI = "1";
 			expect(resolveAppMode(parseArgs([]), true, true)).toBe("interactive");
+		});
+
+		it("explicit accessible signals and print beat --tui", () => {
+			// TERM=dumb can never run the TUI.
+			process.env.TERM = "dumb";
+			expect(resolveAppMode(parseArgs(["--tui"]), true, true)).toBe("accessible");
+			process.env.TERM = "xterm-256color";
+			// An explicit accessible request wins over a TUI request.
+			expect(resolveAppMode(parseArgs(["--tui", "--accessible"]), true, true)).toBe("accessible");
+			// Piped output is still print, even with --tui.
+			expect(resolveAppMode(parseArgs(["--tui"]), false, true)).toBe("print");
+		});
+	});
+
+	describe("tuiRequested", () => {
+		it("is true for --tui and PI_TUI", () => {
+			expect(tuiRequested(parseArgs(["--tui"]))).toBe(true);
+			process.env.PI_TUI = "1";
+			expect(tuiRequested(parseArgs([]))).toBe(true);
+		});
+
+		it("is false by default and when accessible is explicitly signalled", () => {
+			expect(tuiRequested(parseArgs([]))).toBe(false);
+			expect(tuiRequested(parseArgs(["--tui", "--accessible"]))).toBe(false);
+			process.env.NO_TUI = "1";
+			expect(tuiRequested(parseArgs(["--tui"]))).toBe(false);
 		});
 	});
 });

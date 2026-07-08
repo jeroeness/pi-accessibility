@@ -119,6 +119,25 @@ export function accessibleRequested(parsed: Args): boolean {
 	return false;
 }
 
+/**
+ * True when the user asked for the full-screen TUI. The accessible REPL is the
+ * default, so the TUI is now opt-in via --tui / PI_TUI. Any explicit accessible
+ * signal (flag, PI_ACCESSIBLE, NO_TUI, TERM=dumb) forces accessible and beats a
+ * TUI request — a dumb terminal can never drive the TUI.
+ */
+export function tuiRequested(parsed: Args): boolean {
+	if (accessibleRequested(parsed)) {
+		return false;
+	}
+	if (parsed.tui) {
+		return true;
+	}
+	if (isTruthyEnvFlag(process.env.PI_TUI)) {
+		return true;
+	}
+	return false;
+}
+
 export function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
 	if (parsed.mode === "rpc") {
 		return "rpc";
@@ -129,10 +148,8 @@ export function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: b
 	if (parsed.print || !stdinIsTTY || !stdoutIsTTY) {
 		return "print";
 	}
-	if (accessibleRequested(parsed)) {
-		return "accessible";
-	}
-	return "interactive";
+	// Accessible is the default for an interactive TTY; the TUI is opt-in.
+	return tuiRequested(parsed) ? "interactive" : "accessible";
 }
 
 function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc"> {
@@ -873,7 +890,9 @@ export async function main(args: string[], options?: MainOptions) {
 			initialImages,
 			initialMessages: parsed.messages,
 			verbose: parsed.verbose,
-			blockOutput: parsed.blockOutput || isTruthyEnvFlag(process.env.PI_BLOCK_OUTPUT),
+			// Block output is the default; --line-output / PI_LINE_OUTPUT opts into line streaming.
+			// (--block-output / PI_BLOCK_OUTPUT remain accepted but are now redundant.)
+			blockOutput: !(parsed.lineOutput || isTruthyEnvFlag(process.env.PI_LINE_OUTPUT)),
 		});
 		stopThemeWatcher();
 		if (exitCode !== 0) {

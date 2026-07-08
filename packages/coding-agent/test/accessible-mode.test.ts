@@ -28,7 +28,7 @@ describe("runAccessibleMode (end to end)", () => {
 
 		expect(code).toBe(0);
 		const transcript = rec.lines.join("\n");
-		expect(rec.lines[0].startsWith("Pi coding agent v")).toBe(true);
+		expect(rec.lines[0]).toBe("Pi by Jeroen Esseveld");
 		expect(transcript).toContain("Hello there");
 		// No "Assistant:" header and no end-of-turn marker (removed as clutter).
 		expect(transcript).not.toContain("Assistant:");

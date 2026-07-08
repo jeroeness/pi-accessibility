@@ -7,7 +7,6 @@
  */
 
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { VERSION } from "../../config.ts";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { dispatchCommand } from "./commands.ts";
@@ -145,14 +144,13 @@ export async function runAccessibleMode(
 	// --- banner + initial messages ------------------------------------------
 
 	const model = session.model;
-	writer.line(`Pi coding agent v${VERSION}`);
+	writer.line("Pi by Jeroen Esseveld");
 	if (!model || isUnknownModel(model)) {
 		writer.line("No model selected. Use /login or /model to select a model.");
 	} else {
-		writer.line(`Model: ${model.provider}/${model.id}   Thinking: ${session.thinkingLevel}`);
+		writer.line(`Model: ${model.id}`);
 	}
-	writer.line(`Directory: ${runtime.cwd}`);
-	writer.line("Type your message and press Enter. Type /help for commands, /quit to exit.");
+	writer.line("Type something or type /help");
 
 	try {
 		if (options.initialMessage) {

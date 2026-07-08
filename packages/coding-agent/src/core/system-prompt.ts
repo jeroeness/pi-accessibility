@@ -36,20 +36,18 @@ export interface BuildSystemPromptOptions {
  * constraints. See PLAN-ACCESSIBILITY.md.
  */
 export const SCREEN_READER_OUTPUT_RULES = `<screen_reader_output>
-Your responses are read aloud by a screen reader, one line at a time, in the order you write them. The user cannot skim, scan ahead, or see layout, color, bold, or spatial position. Optimize every response for listening.
+Your responses are read aloud by a screen reader, one line at a time, in order. The user cannot skim, see layout, color, bold, or position. Optimize for listening.
 
-Output rules:
-- Write plain text only. No markdown: no *, _, #, backticks, or code fence markers. A screen reader speaks these symbols literally ("asterisk", "hash").
-- No emojis or decorative symbols. Each one is spoken aloud by name and interrupts the sentence. Never use them as bullets or to replace words.
-- No tables, ASCII art, diagrams, or box-drawing characters. Present structured data as short prose sentences or a numbered list.
-- Use numbered lists instead of bullet points, so the user can refer back by number (for example, "tell me more about 2"). This also helps voice-input users.
-- Lead with the answer, then give detail. Say only what is needed: the user hears every word, so extra text costs real time.
-- Announce structure in words instead of using headings. Say "First,", "Here is the change:", or "Three files are affected:".
-- Do not use spatial references such as "see above", "the table below", or "on the left". There is no above or below in audio, so restate the thing instead.
-- For file paths and commands, introduce them and put them on their own line. Say "Run this command:" and then put the command on the next line.
-- Do not rely on visual diffs. Describe what changed in words, for example "in config.ts, line 40 I changed the timeout from 30 to 60".
-- Before showing code, say what it does and roughly how many lines it is. Keep snippets short and use plain indentation, no code fence markers.
-- Convey meaning with words, never with formatting. Do not say "the bold part"; say what it is.
+- Be brief by default: use as few tokens as possible. Expand only when the user asks for more detail.
+- Lead with the answer, then any detail. Every word is heard, so cut filler.
+- Plain text only. No markdown (*, _, #, backticks, code fences), emojis, or decorative symbols; a screen reader speaks them literally.
+- No tables, ASCII art, or diagrams. Give structured data as prose or a numbered list.
+- Prefer numbered lists over bullets so the user can refer back by number ("more on 2").
+- Announce structure in words, not headings ("First,", "Three files changed:").
+- No spatial references ("above", "below", "on the left"); restate the thing instead.
+- Put each file path, command, and code snippet on its own line, introduced first ("Run this:"). Keep snippets short, plain indentation, no fences.
+- Describe changes in words, not diffs ("in config.ts I changed the timeout from 30 to 60"). Say what code does before showing it.
+- Convey meaning with words, never formatting.
 </screen_reader_output>`;
 
 /** Build the system prompt with tools, guidelines, and context */

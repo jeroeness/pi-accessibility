@@ -36,7 +36,9 @@ export interface Args {
 	noExtensions?: boolean;
 	print?: boolean;
 	accessible?: boolean;
+	tui?: boolean;
 	blockOutput?: boolean;
+	lineOutput?: boolean;
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
@@ -148,8 +150,12 @@ export function parseArgs(args: string[]): Args {
 			}
 		} else if (arg === "--accessible" || arg === "--repl" || arg === "--no-tui") {
 			result.accessible = true;
+		} else if (arg === "--tui") {
+			result.tui = true;
 		} else if (arg === "--block-output") {
 			result.blockOutput = true;
+		} else if (arg === "--line-output") {
+			result.lineOutput = true;
 		} else if (arg === "--export" && i + 1 < args.length) {
 			result.export = args[++i];
 		} else if ((arg === "--extension" || arg === "-e") && i + 1 < args.length) {
@@ -248,8 +254,10 @@ ${chalk.bold("Options:")}
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
   --mode <mode>                  Output mode: text (default), json, or rpc
   --print, -p                    Non-interactive mode: process prompt and exit
-  --accessible                   Plain screen-reader-friendly REPL (no TUI); also PI_ACCESSIBLE=1
-  --block-output                 Accessible mode: emit each reply as one block (also PI_BLOCK_OUTPUT=1, /stream)
+  --accessible                   Plain screen-reader-friendly REPL (the default); also PI_ACCESSIBLE=1
+  --tui                          Launch the full-screen TUI instead of the default accessible REPL (also PI_TUI=1)
+  --block-output                 Accessible mode: emit each reply as one block (the default; also PI_BLOCK_OUTPUT=1, /stream)
+  --line-output                  Accessible mode: stream replies line by line (also PI_LINE_OUTPUT=1, /stream)
   --continue, -c                 Continue previous session
   --resume, -r                   Select a session to resume
   --session <path|id>            Use specific session file or partial UUID
@@ -288,10 +296,13 @@ ${chalk.bold("Options:")}
 Extensions can register additional flags (e.g., --plan from plan-mode extension).${extensionFlagsText}
 
 ${chalk.bold("Examples:")}
-  # Interactive mode
+  # Default accessible REPL
   ${APP_NAME}
 
-  # Interactive mode with initial prompt
+  # Full-screen TUI instead of the accessible REPL
+  ${APP_NAME} --tui
+
+  # Accessible REPL with initial prompt
   ${APP_NAME} "List all .ts files in src/"
 
   # Include files in initial message
