@@ -16,6 +16,9 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_end", (event, ctx) => {
 		if (!ctx.hasUI) return;
+		// The TPS line is footer/diagnostic chrome. It is spoken aloud as clutter in
+		// the screen-reader REPL, so suppress it there (kept for the graphical TUI).
+		if (ctx.mode === "accessible") return;
 		if (agentStartMs === null) return;
 
 		const elapsedMs = Date.now() - agentStartMs;
