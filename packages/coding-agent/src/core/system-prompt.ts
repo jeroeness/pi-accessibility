@@ -26,6 +26,32 @@ export interface BuildSystemPromptOptions {
 	mode?: "tui" | "accessible" | "rpc" | "json" | "print";
 }
 
+/**
+ * Output rules injected into the system prompt when running in accessible
+ * (screen-reader / REPL) mode. Responses are spoken aloud, linearly, so the
+ * model must avoid visual formatting and front-load information.
+ *
+ * Applied in BOTH the default and custom-prompt paths, and appended after the
+ * base prompt so a custom base prompt cannot silently drop the accessibility
+ * constraints. See PLAN-ACCESSIBILITY.md.
+ */
+export const SCREEN_READER_OUTPUT_RULES = `<screen_reader_output>
+Your responses are read aloud by a screen reader, one line at a time, in the order you write them. The user cannot skim, scan ahead, or see layout, color, bold, or spatial position. Optimize every response for listening.
+
+Output rules:
+- Write plain text only. No markdown: no *, _, #, backticks, or code fence markers. A screen reader speaks these symbols literally ("asterisk", "hash").
+- No emojis or decorative symbols. Each one is spoken aloud by name and interrupts the sentence. Never use them as bullets or to replace words.
+- No tables, ASCII art, diagrams, or box-drawing characters. Present structured data as short prose sentences or a numbered list.
+- Use numbered lists instead of bullet points, so the user can refer back by number (for example, "tell me more about 2"). This also helps voice-input users.
+- Lead with the answer, then give detail. Say only what is needed: the user hears every word, so extra text costs real time.
+- Announce structure in words instead of using headings. Say "First,", "Here is the change:", or "Three files are affected:".
+- Do not use spatial references such as "see above", "the table below", or "on the left". There is no above or below in audio, so restate the thing instead.
+- For file paths and commands, introduce them and put them on their own line. Say "Run this command:" and then put the command on the next line.
+- Do not rely on visual diffs. Describe what changed in words, for example "in config.ts, line 40 I changed the timeout from 30 to 60".
+- Before showing code, say what it does and roughly how many lines it is. Keep snippets short and use plain indentation, no code fence markers.
+- Convey meaning with words, never with formatting. Do not say "the bold part"; say what it is.
+</screen_reader_output>`;
+
 /** Build the system prompt with tools, guidelines, and context */
 export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const {
@@ -50,6 +76,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const date = `${year}-${month}-${day}`;
 
 	const appendSection = appendSystemPrompt ? `\n\n${appendSystemPrompt}` : "";
+	// Accessibility output rules apply regardless of custom vs. default base
+	// prompt, so they are appended in both branches below.
+	const accessibleSection = isAccessibleMode ? `\n\n${SCREEN_READER_OUTPUT_RULES}` : "";
 
 	const contextFiles = providedContextFiles ?? [];
 	const skills = providedSkills ?? [];
@@ -76,6 +105,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		if (customPromptHasRead && skills.length > 0) {
 			prompt += formatSkillsForPrompt(skills);
 		}
+
+		// Enforce accessibility rules even when a custom base prompt is supplied.
+		prompt += accessibleSection;
 
 		// Add date and working directory last
 		prompt += `\nCurrent date: ${date}`;
@@ -129,15 +161,10 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	addGuideline("Be concise in your responses");
 	addGuideline("Show file paths clearly when working with files");
 
-	// Accessible mode guidelines for screen reader users
-	if (isAccessibleMode) {
-		addGuideline("No markdown formatting (no **, #, `, etc.) - write plain text only");
-		addGuideline("No tables - present data as prose or numbered lists");
-		addGuideline("No ASCII art, diagrams, or visual decorations");
-		addGuideline("Use numbered lists instead of bullet points");
-		addGuideline("Announce structure verbally (say 'First:', 'Here is the code:') instead of using headings");
-		addGuideline("For code output: use plain indentation, no code fence markers");
-	}
+	// Accessible-mode output rules are appended as a dedicated section
+	// (SCREEN_READER_OUTPUT_RULES via accessibleSection) rather than mixed into
+	// the guideline bullets, so they read as a hard constraint and also apply on
+	// the custom-prompt path above.
 
 	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
 
@@ -178,6 +205,9 @@ Pi documentation (read only when the user asks about pi itself, its SDK, extensi
 	if (hasRead && skills.length > 0) {
 		prompt += formatSkillsForPrompt(skills);
 	}
+
+	// Screen-reader output rules (no-op unless accessible mode).
+	prompt += accessibleSection;
 
 	// Add date and working directory last
 	prompt += `\nCurrent date: ${date}`;

@@ -6,8 +6,9 @@
  * - Model thinking is dropped entirely (no tokens, no marker).
  * - Consecutive file tools (read/edit/write/ls/grep/find) are grouped by type: one
  *   line per tool name, e.g. `» read: a.ts, b.ts` then `» edit: a.ts (1)`.
- * - bash shows its (truncated) command plus a single ok/fail summary line; the full
- *   output is never printed.
+ * - bash is grouped by (first command word + status): a run renders one line per
+ *   distinct word, e.g. `bash grep ok`, `bash grep (5) ok`, or `bash npm failed`.
+ *   The command arguments and the full output are never printed.
  */
 
 import { basename } from "node:path";
@@ -175,10 +176,14 @@ class AccessibleEventRenderer implements EventRenderer {
 
 	private handleToolStart(toolCallId: string, toolName: string, toolArgs: unknown): void {
 		if (toolName === "bash") {
+			// A bash call breaks any pending file-tool group so reading order is preserved.
+			this.flushFileRun();
 			this.pendingBashLabels.set(toolCallId, firstWordOf(commandOf(toolArgs)));
 			return;
 		}
 		if (FILE_TOOLS.has(toolName)) {
+			// A file call breaks any pending bash group so reading order is preserved.
+			this.flushBashRun();
 			this.pendingFileLabels.set(toolCallId, fileLabel(toolName, toolArgs));
 			return;
 		}

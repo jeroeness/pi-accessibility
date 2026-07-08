@@ -35,7 +35,8 @@ TERM=dumb pi           # auto-detected
   escape codes are stripped from all output.
 - **Model thinking is not shown**, and tool output is summarized rather than dumped:
   consecutive file operations are grouped by type (`» read: a.ts, b.ts`), and `bash`
-  shows its command plus a single `ok`/`fail` summary line.
+  calls are reduced to `bash <first-word> <ok|failed>`, grouping a run of the same
+  command with a count (`bash grep (5) ok`). Command arguments and output are not shown.
 - **Minimal chrome.** Responses are printed directly (no `Assistant:` header) and there is
   no end-of-turn marker — the `^` prompt simply returns when it is your turn to type.
 
@@ -52,8 +53,7 @@ I'll read the file, add the alias, then run the tests.
 
 » read: args.ts
 » edit: args.ts (1)
-» bash: npm run test -- args
-  ✓ bash ok — 12 passed (12)
+bash npm ok
 
 Done. Added -V alongside --version; the arg-parser tests pass (12 of 12).
 

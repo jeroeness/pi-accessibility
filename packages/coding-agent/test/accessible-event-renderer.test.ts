@@ -110,7 +110,7 @@ describe("file tool grouping", () => {
 			toolStart("3", "read", { path: "b.ts" }),
 			toolEnd("3", "read", textResult("...")),
 		]);
-		expect(lines).toEqual(["» read: a.ts", "» bash: ls", "  ✓ bash ok — out", "» read: b.ts"]);
+		expect(lines).toEqual(["» read: a.ts", "bash ls ok", "» read: b.ts"]);
 	});
 
 	it("breaks a failed file op out of the group onto its own line", () => {
@@ -136,37 +136,41 @@ describe("file tool grouping", () => {
 });
 
 describe("bash", () => {
-	it("shows the command and a single ok summary line", () => {
+	it("shows the tool, first command word, and ok status; never the args or output", () => {
 		const lines = render([
 			toolStart("1", "bash", { command: "npm run test -- args" }),
 			toolEnd("1", "bash", textResult("running...\n12 passed (12)")),
 		]);
-		expect(lines).toEqual(["» bash: npm run test -- args", "  ✓ bash ok — 12 passed (12)"]);
+		expect(lines).toEqual(["bash npm ok"]);
 	});
 
-	it("shows fail with exit code and a single summary line", () => {
+	it("shows failed status without the command output or exit code", () => {
 		const lines = render([
 			toolStart("1", "bash", { command: "npm run build" }),
 			toolEnd("1", "bash", textResult("Cannot find name 'foo'", { details: { exitCode: 2 } }), true),
 		]);
-		expect(lines).toEqual(["» bash: npm run build", "  ✗ bash failed (exit 2) — Cannot find name 'foo'"]);
+		expect(lines).toEqual(["bash npm failed"]);
 	});
 
-	it("truncates a long command to <= 80 columns with an ellipsis", () => {
-		const longCommand = `for f in $(git ls-files '*.ts'); do npx tsc --noEmit "$f" && echo "ok $f"; done # ${"x".repeat(40)}`;
-		const lines = render([toolStart("1", "bash", { command: longCommand })]);
-		const commandLine = lines[0];
-		expect(commandLine.startsWith("» bash: ")).toBe(true);
-		expect(commandLine.endsWith("…")).toBe(true);
-		expect(commandLine.slice("» bash: ".length).length).toBe(80);
+	it("groups a run of same-command calls into one counted line", () => {
+		const events: AgentSessionEvent[] = [];
+		for (let i = 1; i <= 5; i++) {
+			events.push(toolStart(String(i), "bash", { command: `grep -n foo file${i}.ts` }));
+			events.push(toolEnd(String(i), "bash", textResult("...")));
+		}
+		expect(render(events)).toEqual(["bash grep (5) ok"]);
 	});
 
-	it("strips ANSI from the bash summary line", () => {
+	it("splits ok and failed of the same command into separate lines within a run", () => {
 		const lines = render([
-			toolStart("1", "bash", { command: "echo hi" }),
-			toolEnd("1", "bash", textResult(`${ESC}[32mhi${ESC}[0m`)),
+			toolStart("1", "bash", { command: "grep a" }),
+			toolEnd("1", "bash", textResult("...")),
+			toolStart("2", "bash", { command: "grep b" }),
+			toolEnd("2", "bash", textResult("boom"), true),
+			toolStart("3", "bash", { command: "grep c" }),
+			toolEnd("3", "bash", textResult("...")),
 		]);
-		expect(lines).toEqual(["» bash: echo hi", "  ✓ bash ok — hi"]);
+		expect(lines).toEqual(["bash grep (2) ok", "bash grep failed"]);
 	});
 });
 

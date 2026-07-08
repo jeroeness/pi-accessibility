@@ -2131,8 +2131,14 @@ export class AgentSession {
 		if (bindings.uiContext !== undefined) {
 			this._extensionUIContext = bindings.uiContext;
 		}
-		if (bindings.mode !== undefined) {
+		if (bindings.mode !== undefined && bindings.mode !== this._extensionMode) {
 			this._extensionMode = bindings.mode;
+			// The system prompt is mode-dependent (accessible mode injects the
+			// screen-reader output rules). It was first built at construction, before
+			// the run mode was known, so rebuild it now that the mode is set —
+			// otherwise the mode-specific section never reaches the model.
+			this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+			this.agent.state.systemPrompt = this._systemPromptOverride ?? this._baseSystemPrompt;
 		}
 		if (bindings.commandContextActions !== undefined) {
 			this._extensionCommandContextActions = bindings.commandContextActions;

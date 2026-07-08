@@ -113,7 +113,7 @@ describe("buildSystemPrompt", () => {
 	});
 
 	describe("accessible mode", () => {
-		test("includes screen reader guidelines when mode is accessible", () => {
+		test("includes screen reader output rules when mode is accessible", () => {
 			const prompt = buildSystemPrompt({
 				selectedTools: ["read", "bash"],
 				contextFiles: [],
@@ -122,15 +122,31 @@ describe("buildSystemPrompt", () => {
 				mode: "accessible",
 			});
 
-			expect(prompt).toContain("No markdown formatting");
-			expect(prompt).toContain("No tables");
-			expect(prompt).toContain("No ASCII art");
+			expect(prompt).toContain("<screen_reader_output>");
+			expect(prompt).toContain("read aloud by a screen reader");
+			expect(prompt).toContain("No markdown");
+			expect(prompt).toContain("No emojis or decorative symbols");
+			expect(prompt).toContain("No tables, ASCII art");
 			expect(prompt).toContain("numbered lists instead of bullet points");
-			expect(prompt).toContain("Announce structure verbally");
 			expect(prompt).toContain("no code fence markers");
 		});
 
-		test("does not include screen reader guidelines for other modes", () => {
+		test("appends screen reader output rules even when a custom prompt is supplied", () => {
+			const prompt = buildSystemPrompt({
+				customPrompt: "You are a specialized assistant.",
+				selectedTools: ["read", "bash"],
+				contextFiles: [],
+				skills: [],
+				cwd: process.cwd(),
+				mode: "accessible",
+			});
+
+			expect(prompt).toContain("You are a specialized assistant.");
+			expect(prompt).toContain("<screen_reader_output>");
+			expect(prompt).toContain("No emojis or decorative symbols");
+		});
+
+		test("does not include screen reader output rules for other modes", () => {
 			const prompt = buildSystemPrompt({
 				selectedTools: ["read", "bash"],
 				contextFiles: [],
@@ -139,11 +155,11 @@ describe("buildSystemPrompt", () => {
 				mode: "tui",
 			});
 
-			expect(prompt).not.toContain("No markdown formatting");
-			expect(prompt).not.toContain("No tables");
+			expect(prompt).not.toContain("<screen_reader_output>");
+			expect(prompt).not.toContain("read aloud by a screen reader");
 		});
 
-		test("does not include screen reader guidelines when mode is undefined", () => {
+		test("does not include screen reader output rules when mode is undefined", () => {
 			const prompt = buildSystemPrompt({
 				selectedTools: ["read", "bash"],
 				contextFiles: [],
@@ -151,7 +167,7 @@ describe("buildSystemPrompt", () => {
 				cwd: process.cwd(),
 			});
 
-			expect(prompt).not.toContain("No markdown formatting");
+			expect(prompt).not.toContain("<screen_reader_output>");
 		});
 	});
 });
