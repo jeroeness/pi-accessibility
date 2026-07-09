@@ -101,7 +101,7 @@ describe("file tool grouping", () => {
 			toolStart("3", "edit", { path: "src/args.ts", edits: [{ oldText: "a", newText: "b" }] }),
 			toolEnd("3", "edit", textResult("ok")),
 		]);
-		expect(lines).toEqual(["» read: args.ts, main.ts", "» edit: args.ts"]);
+		expect(lines).toEqual(["» read: args.ts, main.ts.", "» edit: args.ts."]);
 	});
 
 	it("collapses repeated targets within a group to one counted entry", () => {
@@ -113,7 +113,7 @@ describe("file tool grouping", () => {
 			toolStart("3", "read", { path: "src/b.ts" }),
 			toolEnd("3", "read", textResult("...")),
 		]);
-		expect(lines).toEqual(["» read: a.ts (2), b.ts"]);
+		expect(lines).toEqual(["» read: a.ts (2), b.ts."]);
 	});
 
 	it("counts repeated edits to the same file (uniform times-touched count)", () => {
@@ -123,7 +123,7 @@ describe("file tool grouping", () => {
 			toolStart("2", "edit", { path: "src/a.ts", edits: [{ oldText: "p", newText: "q" }] }),
 			toolEnd("2", "edit", textResult("ok")),
 		]);
-		expect(lines).toEqual(["» edit: a.ts (2)"]);
+		expect(lines).toEqual(["» edit: a.ts (2)."]);
 	});
 
 	it("does not merge across assistant text (reading order preserved)", () => {
@@ -136,7 +136,7 @@ describe("file tool grouping", () => {
 			toolStart("2", "read", { path: "a.ts" }),
 			toolEnd("2", "read", textResult("...")),
 		]);
-		expect(lines).toEqual(["» read: a.ts", "looking", "» read: a.ts"]);
+		expect(lines).toEqual(["» read: a.ts.", "looking", "» read: a.ts."]);
 	});
 
 	it("breaks the group at a bash call (read, bash, read -> three groups)", () => {
@@ -148,7 +148,7 @@ describe("file tool grouping", () => {
 			toolStart("3", "read", { path: "b.ts" }),
 			toolEnd("3", "read", textResult("...")),
 		]);
-		expect(lines).toEqual(["» read: a.ts", "bash ls ok", "» read: b.ts"]);
+		expect(lines).toEqual(["» read: a.ts.", "bash ls ok.", "» read: b.ts."]);
 	});
 
 	it("breaks a failed file op out of the group onto its own minimal line (no status or message)", () => {
@@ -158,7 +158,7 @@ describe("file tool grouping", () => {
 			toolStart("2", "read", { path: "pi" }),
 			toolEnd("2", "read", textResult("EISDIR: illegal operation on a directory, read"), true),
 		]);
-		expect(lines).toEqual(["» read: a.ts", "read: pi failed"]);
+		expect(lines).toEqual(["» read: a.ts.", "read: pi failed."]);
 	});
 
 	it("flushes the group before assistant text", () => {
@@ -169,7 +169,7 @@ describe("file tool grouping", () => {
 			textDelta("done\n"),
 			textEnd(),
 		]);
-		expect(lines).toEqual(["» read: a.ts", "done"]);
+		expect(lines).toEqual(["» read: a.ts.", "done"]);
 	});
 });
 
@@ -179,7 +179,7 @@ describe("bash", () => {
 			toolStart("1", "bash", { command: "npm run test -- args" }),
 			toolEnd("1", "bash", textResult("running...\n12 passed (12)")),
 		]);
-		expect(lines).toEqual(["bash npm ok"]);
+		expect(lines).toEqual(["bash npm ok."]);
 	});
 
 	it("shows failed status without the command output or exit code", () => {
@@ -187,7 +187,7 @@ describe("bash", () => {
 			toolStart("1", "bash", { command: "npm run build" }),
 			toolEnd("1", "bash", textResult("Cannot find name 'foo'", { details: { exitCode: 2 } }), true),
 		]);
-		expect(lines).toEqual(["bash npm failed"]);
+		expect(lines).toEqual(["bash npm failed."]);
 	});
 
 	it("groups a run of same-command calls into one counted line", () => {
@@ -196,7 +196,7 @@ describe("bash", () => {
 			events.push(toolStart(String(i), "bash", { command: `grep -n foo file${i}.ts` }));
 			events.push(toolEnd(String(i), "bash", textResult("...")));
 		}
-		expect(render(events)).toEqual(["bash grep (5) ok"]);
+		expect(render(events)).toEqual(["bash grep (5) ok."]);
 	});
 
 	it("groups repeated tool calls across agent steps into counted lines", () => {
@@ -218,7 +218,7 @@ describe("bash", () => {
 			toolEnd("5", "read", textResult("...")),
 			turnEnd(),
 		]);
-		expect(lines).toEqual(["bash find (2) ok", "» read: system-prompt.ts (2), prompt-templates.ts"]);
+		expect(lines).toEqual(["bash find (2) ok.", "» read: system-prompt.ts (2), prompt-templates.ts."]);
 	});
 
 	it("splits ok and failed of the same command into separate lines within a run", () => {
@@ -230,7 +230,7 @@ describe("bash", () => {
 			toolStart("3", "bash", { command: "grep c" }),
 			toolEnd("3", "bash", textResult("...")),
 		]);
-		expect(lines).toEqual(["bash grep (2) ok", "bash grep failed"]);
+		expect(lines).toEqual(["bash grep (2) ok.", "bash grep failed."]);
 	});
 });
 
@@ -240,7 +240,7 @@ describe("other one-off tools", () => {
 			toolStart("1", "webfetch", { url: "https://x" }),
 			toolEnd("1", "webfetch", textResult("403 Forbidden"), true),
 		]);
-		expect(lines).toEqual(["webfetch: failed"]);
+		expect(lines).toEqual(["webfetch: failed."]);
 	});
 });
 

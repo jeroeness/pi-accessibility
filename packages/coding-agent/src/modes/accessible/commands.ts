@@ -16,6 +16,10 @@ const COMMAND_HELP: Record<string, string> = {
 	login: "/login. Sign in with a subscription or API key.",
 	logout: "/logout. Remove a stored credential.",
 	model: "/model [pattern]. Show or switch the active model. Without a pattern, lists all available models and prompts for a selection.",
+	effort:
+		"/effort [level]. Show or set the thinking level (off, minimal, low, medium, high, xhigh). Without a level, lists the levels the current model supports and prompts for a selection.",
+	plan: "/plan. Enter plan mode: disable edit, write, and bash (read-only tools only) and ask the model to produce a numbered plan without making changes.",
+	build: "/build. Leave plan mode and restore full tool access (edit, write, bash).",
 	compact: "/compact [notes]. Summarize and shrink the conversation context. Optional notes guide the summary.",
 	session: "/session. Show session info and stats including model, token counts, and message totals.",
 	stream:
@@ -24,7 +28,10 @@ const COMMAND_HELP: Record<string, string> = {
 	quit: "/quit (or Ctrl+D). Exit.",
 };
 
-const COMMANDS_SUMMARY = `/help /login /logout /model /compact /session /stream /new /quit`;
+/** Built-in command names (without the leading slash), used for Tab completion. */
+export const COMMAND_NAMES: string[] = Object.keys(COMMAND_HELP);
+
+const COMMANDS_SUMMARY = `/help. /login. /logout. /model. /effort. /plan. /build. /compact. /session. /stream. /new. /quit.`;
 
 /**
  * Dispatch a submitted line. Returns `sendAsPrompt` for non-commands and for
@@ -69,6 +76,18 @@ export async function dispatchCommand(line: string, ctx: CommandContext): Promis
 
 		case "model":
 			await handleModel(ctx, rest);
+			return { kind: "handled" };
+
+		case "effort":
+			await handleEffort(ctx, rest);
+			return { kind: "handled" };
+
+		case "plan":
+			handlePlan(ctx);
+			return { kind: "handled" };
+
+		case "build":
+			handleBuild(ctx);
 			return { kind: "handled" };
 
 		case "compact":
@@ -143,7 +162,7 @@ async function handleModel(ctx: CommandContext, pattern: string): Promise<void> 
 	}
 	providerOrder.sort((a, b) => a.localeCompare(b));
 
-	ctx.writer.line(`Current model: ${modelLabel(current)}`);
+	ctx.writer.line(`Current model: ${modelLabel(current)}.`);
 	ctx.writer.line("Available models:");
 	const ordered: Model<any>[] = [];
 	for (const provider of providerOrder) {
@@ -151,7 +170,7 @@ async function handleModel(ctx: CommandContext, pattern: string): Promise<void> 
 		const providerModels = (byProvider.get(provider) ?? []).slice().sort((a, b) => a.id.localeCompare(b.id));
 		for (const model of providerModels) {
 			ordered.push(model);
-			ctx.writer.line(`  ${ordered.length}. ${model.id}`);
+			ctx.writer.line(`  ${ordered.length}. ${model.id}.`);
 		}
 	}
 
@@ -164,6 +183,70 @@ async function handleModel(ctx: CommandContext, pattern: string): Promise<void> 
 	const selected = ordered[choice - 1];
 	await ctx.session.setModel(selected);
 	ctx.writer.line(`Model set to ${selected.provider}/${selected.id}.`);
+}
+
+async function handleEffort(ctx: CommandContext, arg: string): Promise<void> {
+	const current = ctx.session.thinkingLevel;
+
+	if (!ctx.session.supportsThinking()) {
+		ctx.writer.line(`The current model does not support thinking. Current level: ${current}.`);
+		return;
+	}
+
+	const levels = ctx.session.getAvailableThinkingLevels();
+
+	// Direct set: /effort high
+	if (arg) {
+		const wanted = arg.trim().toLowerCase();
+		const match = levels.find((level) => level === wanted);
+		if (!match) {
+			ctx.writer.line(
+				`No thinking level matching "${arg}". Current level: ${current}. Available levels: ${levels.join(", ")}.`,
+			);
+			return;
+		}
+		ctx.session.setThinkingLevel(match);
+		// Report the resulting level (setThinkingLevel clamps to the model's range).
+		ctx.writer.line(`Thinking level set to ${ctx.session.thinkingLevel}.`);
+		return;
+	}
+
+	// Numbered picker.
+	ctx.writer.line(`Current thinking level: ${current}.`);
+	ctx.writer.line("Available levels:");
+	levels.forEach((level, index) => {
+		ctx.writer.line(`  ${index + 1}. ${level}.`);
+	});
+
+	const answer = await ctx.prompter.question("Select a level number (Enter to keep current): ");
+	const choice = Number.parseInt(answer.trim(), 10);
+	if (answer.trim() === "" || Number.isNaN(choice) || choice < 1 || choice > levels.length) {
+		ctx.writer.line("Keeping current thinking level.");
+		return;
+	}
+	const selected = levels[choice - 1];
+	ctx.session.setThinkingLevel(selected);
+	ctx.writer.line(`Thinking level set to ${ctx.session.thinkingLevel}.`);
+}
+
+function handlePlan(ctx: CommandContext): void {
+	if (ctx.planMode.isActive()) {
+		ctx.writer.line("Already in plan mode. Read-only tools only. Use /build to restore full access.");
+		return;
+	}
+	const tools = ctx.planMode.enter(ctx.session);
+	ctx.writer.line("Plan mode on. Edit, write, and bash are disabled.");
+	ctx.writer.line(`Active tools: ${tools.join(", ")}.`);
+	ctx.writer.line("Investigate, then reply with a numbered plan. Use /build to restore full access.");
+}
+
+function handleBuild(ctx: CommandContext): void {
+	if (!ctx.planMode.isActive()) {
+		ctx.writer.line("Already in build mode. Full tool access is enabled.");
+		return;
+	}
+	ctx.planMode.exit(ctx.session);
+	ctx.writer.line("Build mode on. Full tool access restored (edit, write, bash).");
 }
 
 function handleStream(ctx: CommandContext, arg: string): void {

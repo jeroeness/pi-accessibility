@@ -10,6 +10,7 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "../../core/agent-session.ts";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
+import type { PlanModeController } from "./plan-mode.ts";
 
 /** Options for {@link runAccessibleMode}. */
 export interface AccessibleModeOptions {
@@ -93,6 +94,8 @@ export interface CommandContext {
 	prompter: Prompter;
 	/** The active event renderer (for the /stream toggle). */
 	renderer: EventRenderer;
+	/** Plan/build mode toggle (for the /plan and /build commands). */
+	planMode: PlanModeController;
 	/** Re-wire extensions + event subscription after a session is replaced. */
 	rebindSession: () => Promise<void>;
 }

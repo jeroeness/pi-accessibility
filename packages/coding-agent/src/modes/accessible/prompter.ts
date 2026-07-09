@@ -20,12 +20,34 @@ export class InputClosedError extends Error {
 export interface NodeReadlinePrompterOptions {
 	input?: NodeJS.ReadableStream;
 	output?: NodeJS.WritableStream;
+	/**
+	 * Tab-completion function: given the line up to the cursor, resolves to
+	 * `[completions, completeOn]`. readline replaces `completeOn` with the common
+	 * prefix of `completions` and lists them when there is more than one.
+	 */
+	completer?: (line: string) => Promise<[string[], string]>;
 }
 
 export function createNodeReadlinePrompter(options: NodeReadlinePrompterOptions = {}): Prompter {
 	const input = options.input ?? process.stdin;
 	const output = options.output ?? process.stdout;
-	const rl: ReadlineInterface = createInterface({ input, output, terminal: true });
+	const completerOption = options.completer;
+	// Adapt the promise-returning completer to readline's node-style callback form;
+	// a failed lookup degrades to "no completions" rather than crashing input.
+	const completer = completerOption
+		? (line: string, callback: (err: null, result: [string[], string]) => void): void => {
+				completerOption(line).then(
+					(result) => callback(null, result),
+					() => callback(null, [[], line]),
+				);
+			}
+		: undefined;
+	const rl: ReadlineInterface = createInterface({
+		input,
+		output,
+		terminal: true,
+		...(completer ? { completer } : {}),
+	});
 
 	let closed = false;
 	let pendingReject: ((error: Error) => void) | undefined;

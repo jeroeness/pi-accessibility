@@ -211,7 +211,7 @@ class AccessibleEventRenderer implements EventRenderer {
 				this.flushBashRun();
 				this.flushFileRun();
 				// Minimal failure line: no `»`, no status code, no error text.
-				this.writer.line(`${toolName}: ${label} failed`);
+				this.writer.line(withStop(`${toolName}: ${label} failed`));
 			} else {
 				this.fileRun.push({ tool: toolName, label });
 			}
@@ -219,10 +219,10 @@ class AccessibleEventRenderer implements EventRenderer {
 		}
 		// Other one-off tool.
 		if (isError) {
-			this.writer.line(`${toolName}: failed`);
+			this.writer.line(withStop(`${toolName}: failed`));
 		} else {
 			const summary = lastNonEmptyLine(extractResultText(result));
-			this.writer.line(`» ${toolName}: ${summary ? truncateLine(summary, MAX_SUMMARY) : "ok"}`);
+			this.writer.line(withStop(`» ${toolName}: ${summary ? truncateLine(summary, MAX_SUMMARY) : "ok"}`));
 		}
 	}
 
@@ -245,7 +245,7 @@ class AccessibleEventRenderer implements EventRenderer {
 			const [firstWord, status] = key.split(":");
 			const count = counts.get(key)!;
 			const countStr = count > 1 ? ` (${count})` : "";
-			this.writer.line(`bash ${firstWord}${countStr} ${status}`);
+			this.writer.line(withStop(`bash ${firstWord}${countStr} ${status}`));
 		}
 		this.bashRun = [];
 	}
@@ -276,7 +276,7 @@ class AccessibleEventRenderer implements EventRenderer {
 				const count = group.counts.get(label)!;
 				return count > 1 ? `${label} (${count})` : label;
 			});
-			this.writer.line(`» ${tool}: ${parts.join(", ")}`);
+			this.writer.line(withStop(`» ${tool}: ${parts.join(", ")}`));
 		}
 		this.fileRun = [];
 	}
@@ -305,6 +305,16 @@ class AccessibleEventRenderer implements EventRenderer {
 
 function str(value: unknown): string {
 	return typeof value === "string" ? value : "";
+}
+
+/**
+ * Ensure a spoken line ends with sentence punctuation. Screen-reader narrators do
+ * not register the newline itself, so a tool line ending on a bare word (`ok`,
+ * `failed`) or a filename runs straight into the next line unless it ends with a
+ * stop. Lines that already end with terminal punctuation are left untouched.
+ */
+function withStop(line: string): string {
+	return /[.!?:…]$/.test(line) ? line : `${line}.`;
 }
 
 function firstWordOf(command: string): string {

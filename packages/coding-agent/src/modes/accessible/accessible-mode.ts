@@ -9,10 +9,12 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
-import { dispatchCommand } from "./commands.ts";
+import { createCompleter } from "./autocomplete.ts";
+import { COMMAND_NAMES, dispatchCommand } from "./commands.ts";
 import { createEventRenderer } from "./event-renderer.ts";
 import { createLineWriter } from "./line-writer.ts";
 import { isUnknownModel } from "./model-label.ts";
+import { createPlanMode } from "./plan-mode.ts";
 import { createNodeReadlinePrompter } from "./prompter.ts";
 import { createTextUIContext } from "./text-ui-context.ts";
 import type { AccessibleModeOptions, LineWriter, Prompter } from "./types.ts";
@@ -33,12 +35,36 @@ export async function runAccessibleMode(
 	deps: AccessibleModeDeps = {},
 ): Promise<number> {
 	const writer = deps.writer ?? createLineWriter();
-	const prompter = deps.prompter ?? createNodeReadlinePrompter();
-	const renderer = createEventRenderer(writer, { verbose: options.verbose, blockOutput: options.blockOutput });
 
 	let session = runtime.session;
 	let unsubscribe: (() => void) | undefined;
 	let disposed = false;
+	const planMode = createPlanMode();
+
+	// Tab completion for the readline prompt: command names, command arguments, and
+	// file/path tokens. Closures read the current (rebindable) session at Tab time.
+	const argCompletionsFor = (command: string): string[] | null => {
+		switch (command) {
+			case "effort":
+				return session.supportsThinking() ? [...session.getAvailableThinkingLevels()] : [];
+			case "stream":
+				return ["block", "line"];
+			case "help":
+				return COMMAND_NAMES;
+			case "model":
+				return session.modelRegistry.getAvailable().map((m) => `${m.provider}/${m.id}`);
+			default:
+				return null;
+		}
+	};
+	const completer = createCompleter({
+		cwd: runtime.cwd,
+		getCommandNames: () => COMMAND_NAMES,
+		getArgCompletions: (command) => argCompletionsFor(command),
+	});
+
+	const prompter = deps.prompter ?? createNodeReadlinePrompter({ completer });
+	const renderer = createEventRenderer(writer, { verbose: options.verbose, blockOutput: options.blockOutput });
 
 	const dispose = async (): Promise<void> => {
 		if (disposed) return;
@@ -130,7 +156,9 @@ export async function runAccessibleMode(
 	const submit = async (text: string, images?: ImageContent[]): Promise<void> => {
 		interrupted = false;
 		try {
-			await session.prompt(text, images ? { images } : undefined);
+			// In plan mode, prefix the plan directive so the model produces a plan
+			// rather than acting (the tool restriction is enforced separately).
+			await session.prompt(planMode.decorate(text), images ? { images } : undefined);
 		} catch (error: unknown) {
 			writer.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
 		}
@@ -144,13 +172,13 @@ export async function runAccessibleMode(
 	// --- banner + initial messages ------------------------------------------
 
 	const model = session.model;
-	writer.line("Pi by Jeroen Esseveld");
+	writer.line("Pi by Jeroen Esseveld.");
 	if (!model || isUnknownModel(model)) {
 		writer.line("No model selected. Use /login or /model to select a model.");
 	} else {
-		writer.line(`Model: ${model.id}`);
+		writer.line(`Model: ${model.id}.`);
 	}
-	writer.line("Type something or type /help");
+	writer.line("Type something or type /help.");
 
 	try {
 		if (options.initialMessage) {
@@ -182,6 +210,7 @@ export async function runAccessibleMode(
 					writer,
 					prompter,
 					renderer,
+					planMode,
 					rebindSession,
 				});
 				if (result.kind === "exit") {
