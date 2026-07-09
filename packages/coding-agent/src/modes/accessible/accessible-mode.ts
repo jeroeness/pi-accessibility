@@ -15,8 +15,10 @@ import { createEventRenderer } from "./event-renderer.ts";
 import { createLineWriter } from "./line-writer.ts";
 import { isUnknownModel } from "./model-label.ts";
 import { createPlanMode } from "./plan-mode.ts";
-import { createNodeReadlinePrompter } from "./prompter.ts";
+import { createNodeReadlinePrompter, InputClosedError, QuestionAbortedError } from "./prompter.ts";
+import { runResumeReplay } from "./resume-replay.ts";
 import { createTextUIContext } from "./text-ui-context.ts";
+import { createTranscriptRecorder, readTranscriptLines } from "./transcript.ts";
 import type { AccessibleModeOptions, LineWriter, Prompter } from "./types.ts";
 
 export type { AccessibleModeOptions } from "./types.ts";
@@ -35,6 +37,9 @@ export async function runAccessibleMode(
 	deps: AccessibleModeDeps = {},
 ): Promise<number> {
 	const writer = deps.writer ?? createLineWriter();
+	// Records the active session's conversation (user + assistant + tool activity)
+	// to its sidecar transcript for replay on resume. Retargeted on every rebind.
+	const recorder = createTranscriptRecorder();
 
 	let session = runtime.session;
 	let unsubscribe: (() => void) | undefined;
@@ -64,7 +69,13 @@ export async function runAccessibleMode(
 	});
 
 	const prompter = deps.prompter ?? createNodeReadlinePrompter({ completer });
-	const renderer = createEventRenderer(writer, { verbose: options.verbose, blockOutput: options.blockOutput });
+	// The renderer writes through the recorder wrapper so assistant text and tool
+	// activity land in the transcript; the plain `writer` (banner, commands, prompts,
+	// errors, resume replay) is never recorded.
+	const renderer = createEventRenderer(recorder.wrapWriter(writer), {
+		verbose: options.verbose,
+		blockOutput: options.blockOutput,
+	});
 
 	const dispose = async (): Promise<void> => {
 		if (disposed) return;
@@ -76,6 +87,8 @@ export async function runAccessibleMode(
 
 	const rebindSession = async (): Promise<void> => {
 		session = runtime.session;
+		// Follow the active session so recording (and future resumes) target its transcript.
+		recorder.setSessionFile(session.sessionFile);
 		await session.bindExtensions({
 			uiContext: createTextUIContext(prompter, writer),
 			mode: "accessible",
@@ -140,7 +153,14 @@ export async function runAccessibleMode(
 
 	let awaitingExitConfirm = false;
 	let interrupted = false;
+	// While a modal prompt (e.g. the resume confirmation) is open, Ctrl+C is routed
+	// here to cancel that prompt instead of arming the app-exit confirmation.
+	let modalSigint: (() => void) | undefined;
 	prompter.onSigint(() => {
+		if (modalSigint) {
+			modalSigint();
+			return;
+		}
 		if (session.isStreaming) {
 			interrupted = true;
 			void session.abort();
@@ -153,14 +173,50 @@ export async function runAccessibleMode(
 		}
 	});
 
+	// Resume a session behind the transcript confirmation gate + replay. Wired here
+	// (not in commands.ts) because it needs the plain writer, the prompter's abort
+	// support, and the modal Ctrl+C hook.
+	const resumeSession = (sessionPath: string, sessionLabel?: string): Promise<{ cancelled: boolean }> =>
+		runResumeReplay(
+			{
+				writer,
+				question: (query, signal) => prompter.question(query, signal),
+				readTranscriptLines,
+				switchSession: async (path) => {
+					try {
+						return await runtime.switchSession(path);
+					} catch (error: unknown) {
+						writer.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+						return { cancelled: true };
+					}
+				},
+				onCancelSignal: (handler) => {
+					modalSigint = handler;
+					return () => {
+						if (modalSigint === handler) {
+							modalSigint = undefined;
+						}
+					};
+				},
+			},
+			sessionPath,
+			sessionLabel,
+		);
+
 	const submit = async (text: string, images?: ImageContent[]): Promise<void> => {
 		interrupted = false;
+		// Record the user's original message (pre plan-mode decoration) for transcript replay.
+		recorder.recordUserMessage(text);
+		// It is now the model's turn: keystrokes typed before it finishes ring the bell.
+		prompter.setTurnActive(true);
 		try {
 			// In plan mode, prefix the plan directive so the model produces a plan
 			// rather than acting (the tool restriction is enforced separately).
 			await session.prompt(planMode.decorate(text), images ? { images } : undefined);
 		} catch (error: unknown) {
 			writer.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			prompter.setTurnActive(false);
 		}
 		renderer.endTurn();
 		if (interrupted) {
@@ -204,23 +260,36 @@ export async function runAccessibleMode(
 			if (trimmed === "") continue;
 
 			if (trimmed.startsWith("/")) {
-				const result = await dispatchCommand(trimmed, {
-					session,
-					runtime,
-					writer,
-					prompter,
-					renderer,
-					planMode,
-					rebindSession,
-				});
-				if (result.kind === "exit") {
-					requestExit(result.code);
-					break;
-				}
-				if (result.kind === "handled") {
+				try {
+					const result = await dispatchCommand(trimmed, {
+						session,
+						runtime,
+						writer,
+						prompter,
+						renderer,
+						planMode,
+						rebindSession,
+						resumeSession,
+					});
+					if (result.kind === "exit") {
+						requestExit(result.code);
+						break;
+					}
+					if (result.kind === "handled") {
+						continue;
+					}
+					// "sendAsPrompt" falls through to submit the raw line.
+				} catch (error: unknown) {
+					// A command awaiting its own prompt (e.g. /model, /resume) when input ends or
+					// Ctrl+C fires rejects here. That is a clean shutdown, not a crash: the close/
+					// SIGINT handler already armed exitCode, so just stop looping.
+					if (error instanceof InputClosedError || error instanceof QuestionAbortedError) {
+						break;
+					}
+					// Any other command failure is surfaced but keeps the REPL alive (mirrors submit()).
+					writer.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
 					continue;
 				}
-				// "sendAsPrompt" falls through to submit the raw line.
 			}
 
 			await submit(trimmed);

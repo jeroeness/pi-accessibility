@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added an out-of-turn typing bell to accessible mode: while the model is still responding, each keystroke rings the terminal bell so the user hears that it is not yet their turn (silent once a prompt or question is awaiting their input, and never emitted to a non-TTY output).
+- Added `/resume` and `/resumeglobal` commands to accessible mode: they list up to 10 recent sessions (project-scoped or across all projects) numbered newest-first and resume one by number, or resume directly with `/resume <n>`; a blank or invalid selection does not resume.
 - Added public SDK exports for CLI-equivalent model and scoped-model resolution ([#6201](https://github.com/earendil-works/pi/issues/6201)).
 - Added extension entry renderers for persisted display-only session entries that are rendered in interactive mode without being sent to the model context.
 

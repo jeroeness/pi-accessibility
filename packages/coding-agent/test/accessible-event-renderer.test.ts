@@ -232,6 +232,43 @@ describe("bash", () => {
 		]);
 		expect(lines).toEqual(["bash grep (2) ok.", "bash grep failed."]);
 	});
+
+	it("skips a leading `cd` and reports the command that follows the connector", () => {
+		const lines = render([
+			toolStart("1", "bash", { command: "cd packages/coding-agent && grep -rn foo src" }),
+			toolEnd("1", "bash", textResult("...")),
+		]);
+		expect(lines).toEqual(["bash grep ok."]);
+	});
+
+	it("skips env-assignment and wrapper prefixes", () => {
+		const lines = render([
+			toolStart("1", "bash", { command: "NODE_ENV=test npm run test" }),
+			toolEnd("1", "bash", textResult("...")),
+			toolStart("2", "bash", { command: "sudo apt-get install ripgrep" }),
+			toolEnd("2", "bash", textResult("...")),
+		]);
+		expect(lines).toEqual(["bash npm ok.", "bash apt-get ok."]);
+	});
+
+	it("keeps the navigation word when the whole command is just navigation", () => {
+		const lines = render([
+			toolStart("1", "bash", { command: "cd /tmp/build" }),
+			toolEnd("1", "bash", textResult("")),
+		]);
+		expect(lines).toEqual(["bash cd ok."]);
+	});
+
+	it("distinguishes real commands that share a `cd` prefix instead of merging them", () => {
+		// The motivating bug: every `cd … && <cmd>` collapsed into one `bash cd` bucket.
+		const lines = render([
+			toolStart("1", "bash", { command: "cd pkg && npm test" }),
+			toolEnd("1", "bash", textResult("...")),
+			toolStart("2", "bash", { command: "cd pkg && grep -n foo x" }),
+			toolEnd("2", "bash", textResult("...")),
+		]);
+		expect(lines).toEqual(["bash npm ok.", "bash grep ok."]);
+	});
 });
 
 describe("other one-off tools", () => {

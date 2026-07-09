@@ -8,9 +8,11 @@
  *   accumulate across agent steps until the run is broken by assistant text, a
  *   different tool category, or the turn ending. Repeated targets collapse to one
  *   entry with a count: `» read: a.ts (2), b.ts` then `» edit: c.ts`.
- * - bash is grouped by (first command word + status), also across steps: a run
- *   renders one line per distinct word, e.g. `bash grep ok`, `bash grep (5) ok`,
- *   or `bash npm failed`. The command arguments and the full output are never printed.
+ * - bash is grouped by (command word + status), also across steps: a run renders
+ *   one line per distinct word, e.g. `bash grep ok`, `bash grep (5) ok`, or
+ *   `bash npm failed`. The word is the first *informative* one, skipping navigation
+ *   and wrapper prefixes (`cd pkg && grep …` reads as `grep`, not `cd`). The command
+ *   arguments and the full output are never printed.
  */
 
 import { basename } from "node:path";
@@ -183,7 +185,7 @@ class AccessibleEventRenderer implements EventRenderer {
 		if (toolName === "bash") {
 			// A bash call breaks any pending file-tool group so reading order is preserved.
 			this.flushFileRun();
-			this.pendingBashLabels.set(toolCallId, firstWordOf(commandOf(toolArgs)));
+			this.pendingBashLabels.set(toolCallId, commandWordOf(commandOf(toolArgs)));
 			return;
 		}
 		if (FILE_TOOLS.has(toolName)) {
@@ -317,10 +319,43 @@ function withStop(line: string): string {
 	return /[.!?:…]$/.test(line) ? line : `${line}.`;
 }
 
-function firstWordOf(command: string): string {
-	const trimmed = command.trim();
-	const spaceIndex = trimmed.indexOf(" ");
-	return spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
+/** Env-var assignment prefix, e.g. the `NODE_ENV=` in `NODE_ENV=test npm run …`. */
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** Commands that merely wrap another command; the wrapped command is the informative one. */
+const WRAPPER_WORDS = new Set(["sudo", "env", "command", "nice", "time", "nohup", "exec", "xargs"]);
+/** Pure navigation/assignment segments skipped in favor of the command that follows them. */
+const NAVIGATION_WORDS = new Set(["cd", "pushd", "popd", "export", "set", "unset", "source", "."]);
+
+/**
+ * Pick the most informative single word to label a bash call.
+ *
+ * The naive "first token" is often noise: agents routinely prefix the real command
+ * with `cd <dir> &&`, an env assignment (`FOO=bar cmd`), or a wrapper (`sudo`, `time`).
+ * We split on shell connectors (`&&`, `||`, `;`, `|`, newlines) and return the leading
+ * word of the first segment that is not pure navigation/assignment — so
+ * `cd pkg && grep foo` reads as `grep`, not `cd`. If every segment is navigation
+ * (e.g. a bare `cd /foo`), we fall back to that first word.
+ */
+function commandWordOf(command: string): string {
+	const words = command
+		.trim()
+		.split(/\s*(?:&&|\|\||[;|]|\n)\s*/)
+		.map(leadingWordOf)
+		.filter((word) => word.length > 0);
+	if (words.length === 0) {
+		return "";
+	}
+	return words.find((word) => !NAVIGATION_WORDS.has(word)) ?? words[0];
+}
+
+/** Leading command word of one segment, past any env assignments and wrapper commands. */
+function leadingWordOf(segment: string): string {
+	const tokens = segment.trim().split(/\s+/).filter(Boolean);
+	let index = 0;
+	while (index < tokens.length && (ENV_ASSIGNMENT.test(tokens[index]) || WRAPPER_WORDS.has(tokens[index]))) {
+		index++;
+	}
+	return tokens[index] ?? "";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

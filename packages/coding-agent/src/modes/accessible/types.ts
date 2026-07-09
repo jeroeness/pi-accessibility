@@ -34,7 +34,8 @@ export interface AccessibleModeOptions {
  *
  * Implementations MUST only append plain text; they must never emit cursor-control
  * or alt-screen escape sequences, and should strip ANSI from anything written so a
- * screen reader never receives escape bytes.
+ * screen reader never receives escape bytes. The sole sanctioned exception is
+ * {@link LineWriter.clear}, which resets the terminal on explicit user request.
  */
 export interface LineWriter {
 	/** Write one line to stdout (a trailing newline is added). */
@@ -43,6 +44,12 @@ export interface LineWriter {
 	blank(): void;
 	/** Write one line to stderr (a trailing newline is added). */
 	error(text: string): void;
+	/**
+	 * Clear the terminal screen and scrollback (a fresh start, e.g. on /new). This is
+	 * the one place a writer may emit a control sequence; on non-interactive output it
+	 * is a no-op so redirected logs and captured streams stay clean.
+	 */
+	clear(): void;
 }
 
 /**
@@ -52,9 +59,18 @@ export interface LineWriter {
 export interface Prompter {
 	/**
 	 * Print a prompt and resolve with the user's line (without the trailing newline).
-	 * Rejects when input ends (EOF / close) so callers can break their loop.
+	 * Rejects when input ends (EOF / close) so callers can break their loop. When a
+	 * `signal` is supplied and aborts, the pending question is cancelled and the
+	 * promise rejects.
 	 */
-	question(query: string): Promise<string>;
+	question(query: string, signal?: AbortSignal): Promise<string>;
+	/**
+	 * Mark whether a model turn is in progress. While a turn is active and no
+	 * {@link Prompter.question} is pending, keystrokes are "out of turn": the
+	 * prompter rings the terminal bell for each one so the user hears that the
+	 * model has not finished yet and their input is not being read.
+	 */
+	setTurnActive(active: boolean): void;
 	/** Register a handler for Ctrl+C (SIGINT). */
 	onSigint(handler: () => void): void;
 	/** Register a handler for end-of-input (Ctrl+D / stream close). */
@@ -98,4 +114,10 @@ export interface CommandContext {
 	planMode: PlanModeController;
 	/** Re-wire extensions + event subscription after a session is replaced. */
 	rebindSession: () => Promise<void>;
+	/**
+	 * Resume a session by file path, showing the transcript confirmation gate and
+	 * replay. `sessionLabel` is a human-readable identifier (name or message preview)
+	 * shown in the gate. Returns `{ cancelled }`; a cancelled result leaves the current session.
+	 */
+	resumeSession: (sessionPath: string, sessionLabel?: string) => Promise<{ cancelled: boolean }>;
 }

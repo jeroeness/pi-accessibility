@@ -39,6 +39,32 @@ describe("runAccessibleMode (end to end)", () => {
 		harness.cleanup();
 	});
 
+	it("marks the turn active around a prompt so out-of-turn keystrokes ring the bell", async () => {
+		const harness = createHarness({ responses: ["Hello there"] });
+		const runtime = {
+			session: harness.session,
+			cwd: harness.tempDir,
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setRebindSession: vi.fn(),
+			newSession: vi.fn().mockResolvedValue({ cancelled: false }),
+			fork: vi.fn().mockResolvedValue({ cancelled: false }),
+			switchSession: vi.fn().mockResolvedValue({ cancelled: false }),
+		} as unknown as AgentSessionRuntime;
+
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(["hello", "/quit"]);
+
+		await runAccessibleMode(
+			runtime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		// The single turn flips on before the prompt and off after it completes.
+		expect(fake.turnActiveCalls).toEqual([true, false]);
+		harness.cleanup();
+	});
+
 	it("block-output mode emits a multi-line reply as a single block", async () => {
 		const harness = createHarness({ responses: ["line one\nline two"] });
 		const runtime = {
@@ -182,5 +208,35 @@ describe("runAccessibleMode Ctrl+C", () => {
 		const code = await promise;
 		expect(code).toBe(130);
 		expect(rec.lines).toContain("(press Ctrl+C again or type /quit to exit)");
+	});
+
+	it("exits cleanly (no crash) on a second Ctrl+C while a command awaits its own prompt", async () => {
+		// Regression: closing the prompter rejects the command's pending question with
+		// InputClosedError. That used to propagate out of the unguarded dispatchCommand
+		// await and crash the process instead of exiting.
+		const { runtime } = makeStubRuntime({
+			isStreaming: false,
+			modelRegistry: { getAvailable: vi.fn().mockResolvedValue([{ provider: "faux", id: "faux-1" }]) },
+		});
+		const rec = createRecordingWriter();
+		// The main prompt resolves to /model; the command's model-selection prompt then pends.
+		const fake = createFakePrompter(["/model"]);
+
+		const promise = runAccessibleMode(
+			runtime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		// Wait until the command's own question is pending (main prompt + selection prompt asked).
+		while (fake.prompts.length < 2) {
+			await tick();
+		}
+		fake.fireSigint(); // hint
+		fake.fireSigint(); // exit -> closes prompter -> rejects the command's pending question
+
+		const code = await promise;
+		expect(code).toBe(130);
+		expect(rec.errors).toHaveLength(0); // not surfaced as an error; treated as clean shutdown
 	});
 });

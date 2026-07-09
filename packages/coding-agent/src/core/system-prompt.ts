@@ -34,12 +34,17 @@ export interface BuildSystemPromptOptions {
  * Applied in BOTH the default and custom-prompt paths, and appended after the
  * base prompt so a custom base prompt cannot silently drop the accessibility
  * constraints. See PLAN-ACCESSIBILITY.md.
+In particular, put NO blank lines between items of a numbered or bulleted list: list items must be on consecutive lines with no gap between them.
  */
 export const SCREEN_READER_OUTPUT_RULES = `<screen_reader_output>
 Your responses are read aloud by a screen reader, one line at a time, in order. The user cannot skim, see layout, color, bold, or position. Optimize for listening.
 
 - Be brief by default: use as few tokens as possible. Expand only when the user asks for more detail.
 - Lead with the answer, then any detail. Every word is heard, so cut filler.
+- Do not speak alphanumeric identifiers (session ids, commit hashes, UUIDs, tokens, ticket numbers, long file hashes) unless the user specifically asks for one. They are noise when read aloud; refer to things by name or by list number instead.
+- Avoid reading out long or complex URLs (query parameters, tokens, tracking codes, deep paths); they are painful to hear character by character. Name the destination instead ("the pull request", "the pricing docs"), and give a full URL only when the user asks or must copy it.
+- Use blank lines sparingly. A screen reader voices each blank line as a pause, so separate ideas with a single line break and never stack consecutive blank lines. 
+- End every line with a punctuation mark (. ? ! : or ;). A screen reader relies on it to pause and drop intonation at the end of the line; a line without one slurs into the next. Use a colon for a line that introduces what follows (like "Run this:"). Exception: never append punctuation to a line that is itself a command, path, or code snippet, since it would corrupt what the user copies.
 - Plain text only. No markdown (*, _, #, backticks, code fences), emojis, or decorative symbols; a screen reader speaks them literally.
 - No tables, ASCII art, or diagrams. Give structured data as prose or a numbered list.
 - Prefer numbered lists over bullets so the user can refer back by number ("more on 2").
@@ -48,6 +53,8 @@ Your responses are read aloud by a screen reader, one line at a time, in order. 
 - Put each file path, command, and code snippet on its own line, introduced first ("Run this:"). Keep snippets short, plain indentation, no fences.
 - Describe changes in words, not diffs ("in config.ts I changed the timeout from 30 to 60"). Say what code does before showing it.
 - Convey meaning with words, never formatting.
+
+Any of these rules may be overridden by the user: if they explicitly ask for something a rule discourages (a full URL, a raw id, markdown, a diff), honor the request for that response.
 </screen_reader_output>`;
 
 /** Build the system prompt with tools, guidelines, and context */

@@ -9,11 +9,22 @@
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import type { Prompter } from "./types.ts";
 
+/** U+0007 BEL: rung when the user types out of turn (while the model is responding). */
+const BELL = String.fromCharCode(7);
+
 /** Rejected from a pending {@link Prompter.question} when input ends. */
 export class InputClosedError extends Error {
 	constructor() {
 		super("input closed");
 		this.name = "InputClosedError";
+	}
+}
+
+/** Rejected from a pending {@link Prompter.question} when its abort signal fires. */
+export class QuestionAbortedError extends Error {
+	constructor() {
+		super("question aborted");
+		this.name = "QuestionAbortedError";
 	}
 }
 
@@ -51,6 +62,21 @@ export function createNodeReadlinePrompter(options: NodeReadlinePrompterOptions 
 
 	let closed = false;
 	let pendingReject: ((error: Error) => void) | undefined;
+	// A model turn is in progress (set by the loop around each prompt).
+	let turnActive = false;
+	// Number of in-flight questions. Keystrokes are only "out of turn" when the model
+	// is responding AND nothing is actively awaiting the user's input.
+	let pendingQuestions = 0;
+
+	// While a turn is active and no question is pending, ring the bell for every key so
+	// the user hears that it is not their turn yet. Gated on an interactive output so a
+	// redirected/piped stream never receives bell bytes. readline (terminal mode) already
+	// emits `keypress`; we only add a listener.
+	input.on("keypress", () => {
+		if (turnActive && pendingQuestions === 0 && (output as NodeJS.WriteStream).isTTY) {
+			output.write(BELL);
+		}
+	});
 
 	rl.on("close", () => {
 		closed = true;
@@ -60,17 +86,45 @@ export function createNodeReadlinePrompter(options: NodeReadlinePrompterOptions 
 	});
 
 	return {
-		question(query: string): Promise<string> {
+		question(query: string, signal?: AbortSignal): Promise<string> {
 			if (closed) {
 				return Promise.reject(new InputClosedError());
 			}
+			if (signal?.aborted) {
+				return Promise.reject(new QuestionAbortedError());
+			}
 			return new Promise<string>((resolve, reject) => {
-				pendingReject = reject;
-				rl.question(query, (answer) => {
+				pendingQuestions++;
+				let settled = false;
+				const settle = (): void => {
+					if (settled) return;
+					settled = true;
+					pendingQuestions--;
 					pendingReject = undefined;
+					if (signal) signal.removeEventListener("abort", onAbort);
+				};
+				function onAbort(): void {
+					settle();
+					reject(new QuestionAbortedError());
+				}
+				const done = (answer: string): void => {
+					settle();
 					resolve(answer);
-				});
+				};
+				pendingReject = (error: Error): void => {
+					settle();
+					reject(error);
+				};
+				if (signal) {
+					signal.addEventListener("abort", onAbort, { once: true });
+					rl.question(query, { signal }, done);
+				} else {
+					rl.question(query, done);
+				}
 			});
+		},
+		setTurnActive(active: boolean): void {
+			turnActive = active;
 		},
 		onSigint(handler: () => void): void {
 			rl.on("SIGINT", handler);

@@ -48,6 +48,23 @@ describe("createLineWriter", () => {
 		expect(out.join("")).toBe("");
 		expect(err.join("")).toBe("boom\n");
 	});
+
+	it("clear() emits the screen+scrollback reset sequence on a TTY", () => {
+		const chunks: string[] = [];
+		const stream = { write: (s: string) => chunks.push(s), isTTY: true } as unknown as NodeJS.WritableStream;
+		const writer = createLineWriter({ out: stream, err: stream });
+		writer.clear();
+		// Erase screen (2J), erase scrollback (3J), home cursor (H).
+		expect(chunks.join("")).toBe(`${ESC}[2J${ESC}[3J${ESC}[H`);
+	});
+
+	it("clear() is a no-op when output is not a TTY", () => {
+		const chunks: string[] = [];
+		const stream = { write: (s: string) => chunks.push(s) } as unknown as NodeJS.WritableStream;
+		const writer = createLineWriter({ out: stream, err: stream });
+		writer.clear();
+		expect(chunks.join("")).toBe("");
+	});
 });
 
 describe("truncateLine", () => {

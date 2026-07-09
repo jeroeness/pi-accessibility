@@ -35,10 +35,15 @@ TERM=dumb pi           # auto-detected
   escape codes are stripped from all output.
 - **Model thinking is not shown**, and tool output is summarized rather than dumped:
   consecutive file operations are grouped by type (`» read: a.ts, b.ts`), and `bash`
-  calls are reduced to `bash <first-word> <ok|failed>`, grouping a run of the same
-  command with a count (`bash grep (5) ok`). Command arguments and output are not shown.
+  calls are reduced to `bash <command> <ok|failed>`, grouping a run of the same
+  command with a count (`bash grep (5) ok`). The reported command is the first
+  informative word, skipping navigation and wrapper prefixes so `cd pkg && grep …`
+  reads as `bash grep ok`, not `bash cd ok`. Command arguments and output are not shown.
 - **Minimal chrome.** Responses are printed directly (no `Assistant:` header) and there is
   no end-of-turn marker — the `^` prompt simply returns when it is your turn to type.
+- **Out-of-turn typing bell.** While the model is still responding, typing rings the
+  terminal bell on every keystroke to signal that it is not yet your turn. The bell
+  stops as soon as a prompt or question is waiting for your input.
 
 ## Example session
 
@@ -75,6 +80,8 @@ to select a model.` — run `/login` to sign in.
 | `/session` | Show session info and stats. |
 | `/stream [block\|line]` | Show or switch how replies stream (see below). |
 | `/new` | Start a fresh session. |
+| `/resume [number]` | List up to 10 recent sessions in this project and resume one by number. |
+| `/resumeglobal [number]` | Like `/resume`, but list recent sessions across all projects. |
 | `/quit` (or Ctrl+D) | Exit. |
 
 ### Streaming mode: line vs block
@@ -90,6 +97,23 @@ pi --accessible --block-output      # start in block mode (also PI_BLOCK_OUTPUT=
 ^ /stream block                     # or switch at any time
 ^ /stream line
 ^ /stream                           # show the current mode
+```
+
+### Resuming a session
+
+`/resume` lists up to 10 recent sessions in the current project, newest first, and asks
+for a number. `/resumeglobal` does the same across all projects. Pressing Enter without a
+number (or entering a number that is not in the list) does not resume anything.
+
+```text
+^ /resume
+Recent sessions in this project:
+  1. fix the login race. (2 hours ago).
+  2. draft release notes. (1 day ago).
+Select a session number (Enter to cancel): 1
+Resumed session: fix the login race. (2 hours ago).
+
+^ /resume 2                          # resume the 2nd entry directly, no prompt
 ```
 
 ### Logging in
@@ -134,7 +158,7 @@ work too.
 
 ## Not yet supported
 
-Session tree navigation (`/fork`, `/tree`, `/resume`), `/export` / `/share` / `/settings`,
+Session tree navigation (`/fork`, `/tree`), `/export` / `/share` / `/settings`,
 image input, and autocomplete are not available in accessible mode yet — use the standard
 TUI (`pi`) for those. Interactive prompts that extensions raise (confirm / select / input)
 are rendered as plain text questions.

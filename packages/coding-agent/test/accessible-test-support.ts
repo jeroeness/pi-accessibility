@@ -3,6 +3,7 @@
  * Prompter. These are the seams every accessible-mode test builds against.
  */
 
+import { InputClosedError, QuestionAbortedError } from "../src/modes/accessible/prompter.ts";
 import type { LineWriter, Prompter } from "../src/modes/accessible/types.ts";
 
 export interface RecordingWriter {
@@ -30,6 +31,10 @@ export function createRecordingWriter(): RecordingWriter {
 			error(text: string): void {
 				errors.push(text);
 			},
+			clear(): void {
+				// Model a terminal reset: the visible buffer (stdout lines) is wiped.
+				lines.length = 0;
+			},
 		},
 	};
 }
@@ -38,6 +43,8 @@ export interface FakePrompter {
 	prompter: Prompter;
 	/** Prompt strings asked, in order. */
 	prompts: string[];
+	/** Every `setTurnActive` value in call order (true when a turn begins, false when it ends). */
+	turnActiveCalls: boolean[];
 	/** Trigger the registered SIGINT handler. */
 	fireSigint(): void;
 	/** Resolve the currently pending question with `text`. */
@@ -54,23 +61,40 @@ export interface FakePrompter {
 export function createFakePrompter(queued: string[] = []): FakePrompter {
 	const inputs = [...queued];
 	const prompts: string[] = [];
+	const turnActiveCalls: boolean[] = [];
 	const closeHandlers: Array<() => void> = [];
 	let sigintHandler: (() => void) | undefined;
 	let pending: { resolve: (value: string) => void; reject: (error: Error) => void } | undefined;
 	let closed = false;
 
 	const prompter: Prompter = {
-		question(query: string): Promise<string> {
+		question(query: string, signal?: AbortSignal): Promise<string> {
 			prompts.push(query);
 			if (closed) {
-				return Promise.reject(new Error("input closed"));
+				return Promise.reject(new InputClosedError());
+			}
+			if (signal?.aborted) {
+				return Promise.reject(new QuestionAbortedError());
 			}
 			if (inputs.length > 0) {
 				return Promise.resolve(inputs.shift() as string);
 			}
 			return new Promise<string>((resolve, reject) => {
 				pending = { resolve, reject };
+				signal?.addEventListener(
+					"abort",
+					() => {
+						if (pending) {
+							pending = undefined;
+							reject(new QuestionAbortedError());
+						}
+					},
+					{ once: true },
+				);
 			});
+		},
+		setTurnActive(active: boolean): void {
+			turnActiveCalls.push(active);
 		},
 		onSigint(handler: () => void): void {
 			sigintHandler = handler;
@@ -82,7 +106,7 @@ export function createFakePrompter(queued: string[] = []): FakePrompter {
 		close(): void {
 			if (closed) return;
 			closed = true;
-			pending?.reject(new Error("input closed"));
+			pending?.reject(new InputClosedError());
 			pending = undefined;
 			for (const handler of closeHandlers) {
 				handler();
@@ -93,6 +117,7 @@ export function createFakePrompter(queued: string[] = []): FakePrompter {
 	return {
 		prompter,
 		prompts,
+		turnActiveCalls,
 		fireSigint: () => sigintHandler?.(),
 		resolveNext: (text: string) => {
 			pending?.resolve(text);

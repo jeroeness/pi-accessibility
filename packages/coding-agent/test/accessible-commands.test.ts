@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
+import { type SessionInfo, SessionManager } from "../src/core/session-manager.ts";
 import { dispatchCommand } from "../src/modes/accessible/commands.ts";
 import { createPlanMode } from "../src/modes/accessible/plan-mode.ts";
 import type { CommandContext } from "../src/modes/accessible/types.ts";
@@ -20,6 +21,9 @@ function makeCtx(
 		sessionOverrides?: Record<string, unknown>;
 		newSession?: ReturnType<typeof vi.fn>;
 		rebindSession?: ReturnType<typeof vi.fn>;
+		switchSession?: ReturnType<typeof vi.fn>;
+		resumeSession?: ReturnType<typeof vi.fn>;
+		usesDefaultSessionDir?: boolean;
 		thinkingLevel?: string;
 		supportsThinking?: boolean;
 		thinkingLevels?: string[];
@@ -65,12 +69,19 @@ function makeCtx(
 			sessionFile: "/tmp/x.jsonl",
 		}),
 		extensionRunner: { getCommand: vi.fn(overrides.getCommand ?? (() => undefined)) },
+		sessionManager: {
+			getCwd: () => "/project",
+			getSessionDir: () => "/project/.pi/sessions",
+			usesDefaultSessionDir: () => overrides.usesDefaultSessionDir ?? true,
+		},
 		...overrides.sessionOverrides,
 	} as unknown as AgentSession;
 
 	const newSession = overrides.newSession ?? vi.fn().mockResolvedValue({ cancelled: false });
-	const runtime = { session, newSession } as unknown as AgentSessionRuntime;
+	const switchSession = overrides.switchSession ?? vi.fn().mockResolvedValue({ cancelled: false });
+	const runtime = { session, newSession, switchSession } as unknown as AgentSessionRuntime;
 	const rebindSession = overrides.rebindSession ?? vi.fn().mockResolvedValue(undefined);
+	const resumeSession = overrides.resumeSession ?? vi.fn().mockResolvedValue({ cancelled: false });
 
 	let blockOutput = false;
 	const setBlockOutput = vi.fn((value: boolean) => {
@@ -93,6 +104,7 @@ function makeCtx(
 		renderer,
 		planMode,
 		rebindSession: rebindSession as unknown as () => Promise<void>,
+		resumeSession: resumeSession as unknown as CommandContext["resumeSession"],
 	};
 	return {
 		ctx,
@@ -103,6 +115,8 @@ function makeCtx(
 		planMode,
 		compact,
 		newSession,
+		switchSession,
+		resumeSession,
 		rebindSession,
 		session,
 		setBlockOutput,
@@ -125,7 +139,7 @@ describe("dispatchCommand routing", () => {
 		const { ctx, rec } = makeCtx();
 		expect(await dispatchCommand("/help", ctx)).toEqual({ kind: "handled" });
 		expect(rec.lines[0]).toBe(
-			"/help. /login. /logout. /model. /effort. /plan. /build. /compact. /session. /stream. /new. /quit.",
+			"/help. /login. /logout. /model. /effort. /plan. /build. /compact. /session. /stream. /new. /resume. /resumeglobal. /quit.",
 		);
 	});
 
@@ -286,6 +300,24 @@ describe("/compact and /session and /new", () => {
 		expect(rec.lines).toEqual(["Started a new session."]);
 		expect(rec.lines.join("\n")).not.toContain("sess-1");
 	});
+
+	it("/new clears prior terminal output, leaving only the new-session line", async () => {
+		const { ctx, rec } = makeCtx();
+		// Simulate an existing conversation on screen before /new.
+		rec.writer.line("^ earlier question");
+		rec.writer.line("an earlier answer");
+		expect(await dispatchCommand("/new", ctx)).toEqual({ kind: "handled" });
+		expect(rec.lines).toEqual(["Started a new session."]);
+		expect(rec.lines.join("\n")).not.toContain("earlier");
+	});
+
+	it("/new does not clear the screen when the new session is cancelled", async () => {
+		const newSession = vi.fn().mockResolvedValue({ cancelled: true });
+		const { ctx, rec } = makeCtx({ newSession });
+		rec.writer.line("keep me visible");
+		await dispatchCommand("/new", ctx);
+		expect(rec.lines).toEqual(["keep me visible", "New session cancelled."]);
+	});
 });
 
 describe("/stream", () => {
@@ -300,5 +332,132 @@ describe("/stream", () => {
 
 		await dispatchCommand("/stream", ctx);
 		expect(rec.lines.join("\n")).toContain("Streaming mode: line");
+	});
+});
+
+describe("/resume and /resumeglobal", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	function makeSession(overrides: Partial<SessionInfo>): SessionInfo {
+		return {
+			path: "/project/.pi/sessions/a.jsonl",
+			id: "a",
+			cwd: "/project",
+			created: new Date(),
+			modified: new Date(),
+			messageCount: 1,
+			firstMessage: "hello",
+			allMessagesText: "hello",
+			...overrides,
+		};
+	}
+
+	it("lists project sessions and resumes by number", async () => {
+		const sessions = [
+			makeSession({ path: "/p/1.jsonl", id: "1", name: "first", modified: new Date(Date.now() - 120000) }),
+			makeSession({
+				path: "/p/2.jsonl",
+				id: "2",
+				firstMessage: "fix the bug",
+				modified: new Date(Date.now() - 7200000),
+			}),
+		];
+		const list = vi.spyOn(SessionManager, "list").mockResolvedValue(sessions);
+		const { ctx, rec, resumeSession } = makeCtx({ prompterInputs: ["2"] });
+
+		expect(await dispatchCommand("/resume", ctx)).toEqual({ kind: "handled" });
+		expect(list).toHaveBeenCalledWith("/project", "/project/.pi/sessions");
+		expect(rec.lines).toContain("Recent sessions in this project:");
+		expect(rec.lines).toContain("  1. first. (2 minutes ago).");
+		expect(rec.lines).toContain("  2. fix the bug. (2 hours ago).");
+		// An unnamed session passes its first-message preview (not undefined) so the
+		// resume gate can identify it by content instead of showing "(unnamed)".
+		expect(resumeSession).toHaveBeenCalledWith("/p/2.jsonl", "fix the bug");
+	});
+
+	it("does not double the period when a long preview is truncated", async () => {
+		const longMessage = "a".repeat(200);
+		vi.spyOn(SessionManager, "list").mockResolvedValue([
+			makeSession({ firstMessage: longMessage, modified: new Date(Date.now() - 120000) }),
+		]);
+		const { ctx, rec } = makeCtx({ prompterInputs: [""] });
+		await dispatchCommand("/resume", ctx);
+		const line = rec.lines.find((l) => l.startsWith("  1."));
+		expect(line).toContain("... (2 minutes ago).");
+		expect(line).not.toContain("....");
+	});
+
+	it("does not resume when the selection is blank", async () => {
+		vi.spyOn(SessionManager, "list").mockResolvedValue([makeSession({})]);
+		const { ctx, rec, resumeSession } = makeCtx({ prompterInputs: [""] });
+		await dispatchCommand("/resume", ctx);
+		expect(resumeSession).not.toHaveBeenCalled();
+		expect(rec.lines).toContain("Not resuming.");
+	});
+
+	it("does not resume on an out-of-range selection", async () => {
+		vi.spyOn(SessionManager, "list").mockResolvedValue([makeSession({})]);
+		const { ctx, rec, resumeSession } = makeCtx({ prompterInputs: ["9"] });
+		await dispatchCommand("/resume", ctx);
+		expect(resumeSession).not.toHaveBeenCalled();
+		expect(rec.lines).toContain("Not resuming.");
+	});
+
+	it("resumes directly from a numeric argument without prompting", async () => {
+		const sessions = [makeSession({ path: "/p/1.jsonl", id: "1" }), makeSession({ path: "/p/2.jsonl", id: "2" })];
+		vi.spyOn(SessionManager, "list").mockResolvedValue(sessions);
+		const { ctx, resumeSession } = makeCtx();
+		await dispatchCommand("/resume 1", ctx);
+		expect(resumeSession).toHaveBeenCalledWith("/p/1.jsonl", "hello");
+	});
+
+	it("reports when a numeric argument is out of range", async () => {
+		vi.spyOn(SessionManager, "list").mockResolvedValue([makeSession({})]);
+		const { ctx, rec, resumeSession } = makeCtx();
+		await dispatchCommand("/resume 5", ctx);
+		expect(resumeSession).not.toHaveBeenCalled();
+		expect(rec.lines.join("\n")).toContain("No matching session. Not resuming.");
+	});
+
+	it("caps the list at 10 sessions", async () => {
+		const sessions = Array.from({ length: 15 }, (_, i) =>
+			makeSession({ path: `/p/${i}.jsonl`, id: `${i}`, name: `session ${i}` }),
+		);
+		vi.spyOn(SessionManager, "list").mockResolvedValue(sessions);
+		const { ctx, rec } = makeCtx({ prompterInputs: [""] });
+		await dispatchCommand("/resume", ctx);
+		expect(rec.lines.some((l) => l.startsWith("  10."))).toBe(true);
+		expect(rec.lines.some((l) => l.startsWith("  11."))).toBe(false);
+	});
+
+	it("reports when no project sessions exist", async () => {
+		vi.spyOn(SessionManager, "list").mockResolvedValue([]);
+		const { ctx, rec } = makeCtx();
+		await dispatchCommand("/resume", ctx);
+		expect(rec.lines).toContain("No sessions found in this project.");
+	});
+
+	it("/resumeglobal lists sessions across all projects", async () => {
+		const listAll = vi.spyOn(SessionManager, "listAll").mockResolvedValue([makeSession({ path: "/p/g.jsonl" })]);
+		const { ctx, rec } = makeCtx({ prompterInputs: [""] });
+		expect(await dispatchCommand("/resumeglobal", ctx)).toEqual({ kind: "handled" });
+		expect(listAll).toHaveBeenCalledWith();
+		expect(rec.lines).toContain("Recent sessions across all projects:");
+	});
+
+	it("/resumeglobal honors a custom session dir", async () => {
+		const listAll = vi.spyOn(SessionManager, "listAll").mockResolvedValue([makeSession({})]);
+		const { ctx } = makeCtx({ prompterInputs: [""], usesDefaultSessionDir: false });
+		await dispatchCommand("/resumeglobal", ctx);
+		expect(listAll).toHaveBeenCalledWith("/project/.pi/sessions");
+	});
+
+	it("prints an error when listing fails", async () => {
+		vi.spyOn(SessionManager, "list").mockRejectedValue(new Error("disk gone"));
+		const { ctx, rec } = makeCtx();
+		await dispatchCommand("/resume", ctx);
+		expect(rec.errors.join("\n")).toContain("disk gone");
 	});
 });

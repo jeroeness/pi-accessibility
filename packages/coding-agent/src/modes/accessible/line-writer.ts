@@ -3,13 +3,17 @@
  *
  * Everything a screen-reader user hears goes through here. The writer strips ANSI
  * escape sequences from every string so control bytes never reach the terminal,
- * and it only ever appends (it never moves the cursor or clears the screen).
+ * and it only ever appends. The lone exception is `clear()` (used by /new), the one
+ * sanctioned place that emits a control sequence to reset the terminal.
  */
 
 import type { LineWriter } from "./types.ts";
 
 const ESC = String.fromCharCode(27); // U+001B escape
 const BEL = String.fromCharCode(7); // U+0007 bell
+// Erase screen (2J), erase scrollback (3J), and home the cursor (H) so /new starts
+// on a genuinely empty terminal rather than just scrolling old output out of view.
+const CLEAR_SCREEN = `${ESC}[2J${ESC}[3J${ESC}[H`;
 
 // CSI sequences: colors, cursor movement, erase, etc. (ESC [ ... final-byte)
 const CSI_RE = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, "g");
@@ -44,6 +48,13 @@ export function createLineWriter(options: LineWriterOptions = {}): LineWriter {
 		},
 		error(text: string): void {
 			err.write(`${stripAnsi(text)}\n`);
+		},
+		clear(): void {
+			// Only meaningful on an interactive terminal; when output is piped or
+			// redirected, emitting the sequence would just corrupt the captured text.
+			if ((out as NodeJS.WriteStream).isTTY) {
+				out.write(CLEAR_SCREEN);
+			}
 		},
 	};
 }
