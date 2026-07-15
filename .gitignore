@@ -29,6 +29,7 @@ coverage/
 tui-debug.log
 compaction-results/
 .opencode/
+.playwright-cli/
 syntax.jsonl
 out.jsonl
 pi-*.html

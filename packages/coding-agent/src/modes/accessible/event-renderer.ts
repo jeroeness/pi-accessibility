@@ -8,6 +8,9 @@
  *   accumulate across agent steps until the run is broken by assistant text, a
  *   different tool category, or the turn ending. Repeated targets collapse to one
  *   entry with a count: `» read: a.ts (2), b.ts` then `» edit: c.ts`.
+ * - Reading a `SKILL.md` file loads a skill, so it is announced on its own as
+ *   `Loaded <skill name>.` (name taken from the file's frontmatter) instead of the
+ *   uninformative `» read: SKILL.md` — every skill's entry file has that same basename.
  * - bash is grouped by (command word + status), also across steps: a run renders
  *   one line per distinct word, e.g. `bash grep ok`, `bash grep (5) ok`, or
  *   `bash npm failed`. The word is the first *informative* one, skipping navigation
@@ -15,7 +18,7 @@
  *   arguments and the full output are never printed.
  */
 
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent } from "../../core/agent-session.ts";
 import { lastNonEmptyLine, truncateLine } from "./line-writer.ts";
@@ -50,6 +53,8 @@ class AccessibleEventRenderer implements EventRenderer {
 	private readonly pendingFileLabels = new Map<string, string>();
 	/** toolCallId -> first word of command captured at bash start. */
 	private readonly pendingBashLabels = new Map<string, string>();
+	/** toolCallId -> SKILL.md path captured at read start, so completion can announce the skill by name. */
+	private readonly pendingSkillReads = new Map<string, string>();
 	private readonly writer: LineWriter;
 	private blockOutput: boolean;
 
@@ -191,6 +196,13 @@ class AccessibleEventRenderer implements EventRenderer {
 		if (FILE_TOOLS.has(toolName)) {
 			// A file call breaks any pending bash group so reading order is preserved.
 			this.flushBashRun();
+			const path = pathOf(asRecord(toolArgs));
+			// Reading a SKILL.md file loads a skill; remember its path so completion can
+			// announce the skill by name instead of a generic `» read: SKILL.md` line
+			// (every skill's entry file shares that same, uninformative basename).
+			if (toolName === "read" && basename(path) === "SKILL.md") {
+				this.pendingSkillReads.set(toolCallId, path);
+			}
 			this.pendingFileLabels.set(toolCallId, fileLabel(toolName, toolArgs));
 			return;
 		}
@@ -209,11 +221,21 @@ class AccessibleEventRenderer implements EventRenderer {
 		if (FILE_TOOLS.has(toolName)) {
 			const label = this.pendingFileLabels.get(toolCallId) ?? toolName;
 			this.pendingFileLabels.delete(toolCallId);
+			const skillPath = this.pendingSkillReads.get(toolCallId);
+			this.pendingSkillReads.delete(toolCallId);
 			if (isError) {
 				this.flushBashRun();
 				this.flushFileRun();
 				// Minimal failure line: no `»`, no status code, no error text.
 				this.writer.line(withStop(`${toolName}: ${label} failed`));
+			} else if (skillPath !== undefined) {
+				// A successful SKILL.md read means a skill was loaded. Announce it by its
+				// declared name (from the file's frontmatter), falling back to the skill's
+				// directory name, rather than the uninformative `» read: SKILL.md`.
+				const name = skillNameFromContent(extractResultText(result)) || basename(dirname(skillPath)) || "skill";
+				this.flushBashRun();
+				this.flushFileRun();
+				this.writer.line(withStop(`Loaded ${name}`));
 			} else {
 				this.fileRun.push({ tool: toolName, label });
 			}
@@ -387,6 +409,23 @@ function fileLabel(toolName: string, argsValue: unknown): string {
 	// The `(count)` suffix is added at flush time and means "times this file was
 	// touched", uniformly across file tools — including edit.
 	return basename(path) || path;
+}
+
+/**
+ * Extract a skill's declared name from SKILL.md content. A SKILL.md file opens with a
+ * YAML frontmatter block delimited by `---`; the skill name is its `name:` field.
+ * Returns undefined when there is no frontmatter or no readable name, so callers can
+ * fall back to the skill's directory name. A small regex keeps this display module free
+ * of a YAML parser — skill names are simple slugs, never quoted or spread across lines.
+ */
+function skillNameFromContent(content: string): string | undefined {
+	const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	if (!normalized.startsWith("---")) return undefined;
+	const endIndex = normalized.indexOf("\n---", 3);
+	if (endIndex === -1) return undefined;
+	const match = normalized.slice(3, endIndex).match(/^name:[ \t]*(.+?)[ \t]*$/m);
+	const name = match?.[1]?.replace(/^["']|["']$/g, "").trim();
+	return name || undefined;
 }
 
 /** Best-effort extraction of a tool result's text (AgentToolResult content, or common shapes). */

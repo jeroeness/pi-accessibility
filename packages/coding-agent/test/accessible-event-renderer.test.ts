@@ -173,6 +173,49 @@ describe("file tool grouping", () => {
 	});
 });
 
+describe("skill loads", () => {
+	const skillFile = "/home/user/.pi/skills/deep-research/SKILL.md";
+	function skillContent(name: string): string {
+		return `---\nname: ${name}\ndescription: Do deep research.\n---\nSkill body here.`;
+	}
+
+	it("announces a SKILL.md read by its frontmatter name instead of `» read: SKILL.md`", () => {
+		const lines = render([
+			toolStart("1", "read", { path: skillFile }),
+			toolEnd("1", "read", textResult(skillContent("deep-research"))),
+		]);
+		expect(lines).toEqual(["Loaded deep-research."]);
+	});
+
+	it("falls back to the skill directory name when the frontmatter has no name field", () => {
+		const lines = render([
+			toolStart("1", "read", { path: skillFile }),
+			toolEnd("1", "read", textResult("---\ndescription: No name field.\n---\nBody.")),
+		]);
+		expect(lines).toEqual(["Loaded deep-research."]);
+	});
+
+	it("keeps a skill announcement on its own line, preserving reading order", () => {
+		const lines = render([
+			toolStart("1", "read", { path: "src/a.ts" }),
+			toolEnd("1", "read", textResult("...")),
+			toolStart("2", "read", { path: skillFile }),
+			toolEnd("2", "read", textResult(skillContent("deep-research"))),
+			toolStart("3", "read", { path: "src/b.ts" }),
+			toolEnd("3", "read", textResult("...")),
+		]);
+		expect(lines).toEqual(["» read: a.ts.", "Loaded deep-research.", "» read: b.ts."]);
+	});
+
+	it("still reports a failed SKILL.md read as a failure, not a load", () => {
+		const lines = render([
+			toolStart("1", "read", { path: skillFile }),
+			toolEnd("1", "read", textResult("EACCES: permission denied"), true),
+		]);
+		expect(lines).toEqual(["read: SKILL.md failed."]);
+	});
+});
+
 describe("bash", () => {
 	it("shows the tool, first command word, and ok status; never the args or output", () => {
 		const lines = render([
