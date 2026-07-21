@@ -139,7 +139,7 @@ describe("dispatchCommand routing", () => {
 		const { ctx, rec } = makeCtx();
 		expect(await dispatchCommand("/help", ctx)).toEqual({ kind: "handled" });
 		expect(rec.lines[0]).toBe(
-			"/help. /login. /logout. /model. /effort. /plan. /build. /compact. /session. /stream. /new. /resume. /resumeglobal. /quit.",
+			"/help. /login. /logout. /model. /effort. /plan. /build. /compact. /session. /token quota. /stream. /new. /resume. /resumeglobal. /quit.",
 		);
 	});
 

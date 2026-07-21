@@ -10,6 +10,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { type SessionInfo, SessionManager } from "../../core/session-manager.ts";
 import { runLogin, runLogout } from "./login.ts";
 import { modelLabel } from "./model-label.ts";
+import { handleTokenQuota } from "./token-quota.ts";
 import type { CommandContext, CommandResult } from "./types.ts";
 
 const COMMAND_HELP: Record<string, string> = {
@@ -23,6 +24,7 @@ const COMMAND_HELP: Record<string, string> = {
 	build: "/build. Leave plan mode and restore full tool access (edit, write, bash).",
 	compact: "/compact [notes]. Summarize and shrink the conversation context. Optional notes guide the summary.",
 	session: "/session. Show session info and stats including model, token counts, and message totals.",
+	token: "/token quota. Show the remaining GitHub Copilot premium request quota for your subscription.",
 	stream:
 		"/stream [block|line]. Show or set how replies stream. Block emits the whole reply at once; line streams line by line.",
 	new: "/new. Start a fresh session.",
@@ -35,7 +37,7 @@ const COMMAND_HELP: Record<string, string> = {
 /** Built-in command names (without the leading slash), used for Tab completion. */
 export const COMMAND_NAMES: string[] = Object.keys(COMMAND_HELP);
 
-const COMMANDS_SUMMARY = `/help. /login. /logout. /model. /effort. /plan. /build. /compact. /session. /stream. /new. /resume. /resumeglobal. /quit.`;
+const COMMANDS_SUMMARY = `/help. /login. /logout. /model. /effort. /plan. /build. /compact. /session. /token quota. /stream. /new. /resume. /resumeglobal. /quit.`;
 
 /**
  * Dispatch a submitted line. Returns `sendAsPrompt` for non-commands and for
@@ -108,6 +110,10 @@ export async function dispatchCommand(line: string, ctx: CommandContext): Promis
 
 		case "session":
 			handleSession(ctx);
+			return { kind: "handled" };
+
+		case "token":
+			await handleTokenQuota(ctx);
 			return { kind: "handled" };
 
 		case "stream":

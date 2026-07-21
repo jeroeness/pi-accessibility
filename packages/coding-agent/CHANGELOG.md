@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a `/token quota` command to accessible mode: it reports the remaining GitHub Copilot premium request quota (plan, remaining of entitlement with percent, chat and completions buckets, and reset date) for the signed-in subscription, using the internal `copilot_internal/user` endpoint with the stored GitHub token.
 - Added an out-of-turn typing bell to accessible mode: while the model is still responding, each keystroke rings the terminal bell so the user hears that it is not yet their turn (silent once a prompt or question is awaiting their input, and never emitted to a non-TTY output).
 - Added `/resume` and `/resumeglobal` commands to accessible mode: they list up to 10 recent sessions (project-scoped or across all projects) numbered newest-first and resume one by number, or resume directly with `/resume <n>`; a blank or invalid selection does not resume.
 - Added public SDK exports for CLI-equivalent model and scoped-model resolution ([#6201](https://github.com/earendil-works/pi/issues/6201)).
