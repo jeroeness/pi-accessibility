@@ -95,7 +95,10 @@ if [[ "$SKIP_DEPS" == "false" ]]; then
     # We need the base clipboard package and all platform bindings for bun cross-compilation
     # Use --force to bypass platform checks (os/cpu restrictions in package.json)
     # Install all in one command to avoid npm removing packages from previous installs
-    npm install --include=optional --no-save --package-lock=false --force --ignore-scripts \
+    # Do NOT add --package-lock=false: it crashes npm's dependency resolver on this
+    # workspace ("Cannot read properties of null (reading 'edgesOut')", npm 10.9.8).
+    # --no-save alone already keeps package-lock.json untouched.
+    npm install --include=optional --no-save --force --ignore-scripts \
         @mariozechner/clipboard@"$CLIPBOARD_VERSION" \
         @mariozechner/clipboard-darwin-arm64@"$CLIPBOARD_VERSION" \
         @mariozechner/clipboard-darwin-x64@"$CLIPBOARD_VERSION" \
