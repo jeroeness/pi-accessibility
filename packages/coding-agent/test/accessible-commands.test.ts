@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
 import { type SessionInfo, SessionManager } from "../src/core/session-manager.ts";
-import { dispatchCommand } from "../src/modes/accessible/commands.ts";
+import { COMMAND_NAMES, dispatchCommand } from "../src/modes/accessible/commands.ts";
 import { createPlanMode } from "../src/modes/accessible/plan-mode.ts";
 import type { CommandContext } from "../src/modes/accessible/types.ts";
 import { createFakePrompter, createRecordingWriter } from "./accessible-test-support.ts";
@@ -57,7 +57,10 @@ function makeCtx(
 		setThinkingLevel,
 		getActiveToolNames: () => activeTools,
 		setActiveToolsByName,
-		modelRegistry: { getAvailable: vi.fn().mockResolvedValue(MODELS) },
+		modelRegistry: {
+			getAvailable: vi.fn().mockResolvedValue(MODELS),
+			authStorage: { get: vi.fn().mockReturnValue(undefined) },
+		},
 		setModel,
 		compact,
 		getSessionStats: () => ({
@@ -87,11 +90,17 @@ function makeCtx(
 	const setBlockOutput = vi.fn((value: boolean) => {
 		blockOutput = value;
 	});
+	let verbose = false;
+	const setVerbose = vi.fn((value: boolean) => {
+		verbose = value;
+	});
 	const renderer = {
 		handle: () => {},
 		endTurn: () => {},
 		setBlockOutput,
 		getBlockOutput: () => blockOutput,
+		setVerbose,
+		getVerbose: () => verbose,
 	};
 
 	const planMode = createPlanMode();
@@ -120,6 +129,7 @@ function makeCtx(
 		rebindSession,
 		session,
 		setBlockOutput,
+		setVerbose,
 	};
 }
 
@@ -135,11 +145,21 @@ describe("dispatchCommand routing", () => {
 		expect(await dispatchCommand("/exit", makeCtx().ctx)).toEqual({ kind: "exit", code: 0 });
 	});
 
+	it(":q exits with code 0", async () => {
+		expect(await dispatchCommand(":q", makeCtx().ctx)).toEqual({ kind: "exit", code: 0 });
+		expect(await dispatchCommand("  :q  ", makeCtx().ctx)).toEqual({ kind: "exit", code: 0 });
+	});
+
+	it("sends other colon lines to the agent", async () => {
+		expect(await dispatchCommand(":q!", makeCtx().ctx)).toEqual({ kind: "sendAsPrompt" });
+		expect(await dispatchCommand(":quit", makeCtx().ctx)).toEqual({ kind: "sendAsPrompt" });
+	});
+
 	it("/help prints the command list", async () => {
 		const { ctx, rec } = makeCtx();
 		expect(await dispatchCommand("/help", ctx)).toEqual({ kind: "handled" });
 		expect(rec.lines[0]).toBe(
-			"/help. /login. /logout. /model. /effort. /plan. /build. /compact. /session. /token quota. /stream. /new. /resume. /resumeglobal. /quit.",
+			"/help. /login. /logout. /model. /effort. /plan. /build. /compact. /session. /usage. /stream. /verbose. /new. /resume. /resumeglobal. /quit.",
 		);
 	});
 
@@ -147,6 +167,45 @@ describe("dispatchCommand routing", () => {
 		const { ctx, rec } = makeCtx();
 		expect(await dispatchCommand("/bogus", ctx)).toEqual({ kind: "handled" });
 		expect(rec.lines.join("\n")).toContain("Unknown command: /bogus");
+	});
+
+	it("/usage and its hidden /token synonym reach the same handler", async () => {
+		const usage = makeCtx();
+		expect(await dispatchCommand("/usage", usage.ctx)).toEqual({ kind: "handled" });
+		const token = makeCtx();
+		expect(await dispatchCommand("/token quota", token.ctx)).toEqual({ kind: "handled" });
+		// Not signed in, so both print the same sign-in hint.
+		expect(token.rec.lines).toEqual(usage.rec.lines);
+		expect(usage.rec.lines.join("\n")).toContain("Not signed in to GitHub Copilot");
+	});
+
+	it("ignores anything typed after /usage", async () => {
+		const plain = makeCtx();
+		await dispatchCommand("/usage", plain.ctx);
+		for (const line of ["/usage quota", "/usage banana", "/token quota please"]) {
+			const withArgs = makeCtx();
+			expect(await dispatchCommand(line, withArgs.ctx)).toEqual({ kind: "handled" });
+			expect(withArgs.rec.lines).toEqual(plain.rec.lines);
+		}
+	});
+
+	it("keeps synonyms out of the command list and Tab completion", async () => {
+		expect(COMMAND_NAMES).toContain("usage");
+		expect(COMMAND_NAMES).not.toContain("token");
+		expect(COMMAND_NAMES).not.toContain("exit");
+		const { ctx, rec } = makeCtx();
+		await dispatchCommand("/help", ctx);
+		expect(rec.lines[0]).not.toContain("/token");
+	});
+
+	it("/help explains a synonym as the command it resolves to", async () => {
+		const { ctx, rec } = makeCtx();
+		await dispatchCommand("/help token", ctx);
+		await dispatchCommand("/help exit", ctx);
+		expect(rec.lines[0]).toBe(
+			"/usage. Show the remaining GitHub Copilot premium request quota for your subscription.",
+		);
+		expect(rec.lines[1]).toBe("/quit (or Ctrl+D, or :q). Exit.");
 	});
 
 	it("falls through to the agent for a registered extension command", async () => {
@@ -332,6 +391,39 @@ describe("/stream", () => {
 
 		await dispatchCommand("/stream", ctx);
 		expect(rec.lines.join("\n")).toContain("Streaming mode: line");
+	});
+});
+
+describe("/verbose", () => {
+	it("toggles reasoning output, accepts on/off, and reports the current state", async () => {
+		const { ctx, rec, setVerbose } = makeCtx();
+
+		// Bare /verbose flips the state, starting from off.
+		expect(await dispatchCommand("/verbose", ctx)).toEqual({ kind: "handled" });
+		expect(setVerbose).toHaveBeenLastCalledWith(true);
+		expect(rec.lines.join("\n")).toContain("Verbose: on");
+
+		await dispatchCommand("/verbose", ctx);
+		expect(setVerbose).toHaveBeenLastCalledWith(false);
+
+		await dispatchCommand("/verbose on", ctx);
+		expect(setVerbose).toHaveBeenLastCalledWith(true);
+		await dispatchCommand("/verbose off", ctx);
+		expect(setVerbose).toHaveBeenLastCalledWith(false);
+
+		// A bad argument reports the state and the usage instead of guessing.
+		setVerbose.mockClear();
+		await dispatchCommand("/verbose loud", ctx);
+		expect(setVerbose).not.toHaveBeenCalled();
+		expect(rec.lines.join("\n")).toContain("Usage: /verbose on|off");
+	});
+
+	it("is listed in the command summary and explained by /help verbose", async () => {
+		const { ctx, rec } = makeCtx();
+		await dispatchCommand("/help", ctx);
+		expect(rec.lines.join("\n")).toContain("/verbose");
+		await dispatchCommand("/help verbose", ctx);
+		expect(rec.lines.join("\n")).toContain("the model's reasoning is printed");
 	});
 });
 

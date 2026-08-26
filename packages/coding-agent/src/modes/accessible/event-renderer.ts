@@ -3,7 +3,9 @@
  *
  * Design (see PLAN-ACCESSIBILITY.md §2):
  * - Assistant text is line-buffered: deltas accumulate and flush on newline / size cap.
- * - Model thinking is dropped entirely (no tokens, no marker).
+ * - Model reasoning is dropped entirely (no tokens, no marker) unless the user turns it
+ *   on with `/verbose`, in which case each reasoning block is announced with a
+ *   `Thinking.` line and then streamed like assistant text.
  * - Consecutive file tools (read/edit/write/ls/grep/find) are grouped by type and
  *   accumulate across agent steps until the run is broken by assistant text, a
  *   different tool category, or the turn ending. Repeated targets collapse to one
@@ -29,10 +31,17 @@ const MAX_BUFFERED_LINE = 2000;
 const MAX_SUMMARY = 100;
 
 export interface EventRendererOptions {
-	/** Reserved for future diagnostics; never surfaces model thinking. */
+	/** Start with model reasoning printed (default false; toggled at runtime by /verbose). */
 	verbose?: boolean;
 	/** Start in block-streaming mode (buffer whole assistant messages). */
 	blockOutput?: boolean;
+	/**
+	 * Sink for reasoning lines; defaults to the main writer. Accessible mode passes the
+	 * unrecorded writer so a verbose turn is spoken but not stored in the resume
+	 * transcript: reasoning is bulk rather than conversation, and a replay must not read
+	 * back thinking from a turn whose verbose setting no longer applies.
+	 */
+	thinkingWriter?: LineWriter;
 }
 
 interface FileEntry {
@@ -47,6 +56,10 @@ interface BashEntry {
 
 class AccessibleEventRenderer implements EventRenderer {
 	private textBuf = "";
+	/** Buffered reasoning deltas; only ever non-empty while verbose is on. */
+	private thinkBuf = "";
+	/** Whether the current reasoning block has already been announced. */
+	private thinkingOpen = false;
 	private fileRun: FileEntry[] = [];
 	private bashRun: BashEntry[] = [];
 	/** toolCallId -> display label captured at tool start (args are not on the end event). */
@@ -56,11 +69,16 @@ class AccessibleEventRenderer implements EventRenderer {
 	/** toolCallId -> SKILL.md path captured at read start, so completion can announce the skill by name. */
 	private readonly pendingSkillReads = new Map<string, string>();
 	private readonly writer: LineWriter;
+	/** Sink for reasoning only; the main writer unless the caller separated them. */
+	private readonly thinkingWriter: LineWriter;
 	private blockOutput: boolean;
+	private verbose: boolean;
 
-	constructor(writer: LineWriter, blockOutput: boolean) {
+	constructor(writer: LineWriter, thinkingWriter: LineWriter, blockOutput: boolean, verbose: boolean) {
 		this.writer = writer;
+		this.thinkingWriter = thinkingWriter;
 		this.blockOutput = blockOutput;
+		this.verbose = verbose;
 	}
 
 	setBlockOutput(enabled: boolean): void {
@@ -69,6 +87,20 @@ class AccessibleEventRenderer implements EventRenderer {
 
 	getBlockOutput(): boolean {
 		return this.blockOutput;
+	}
+
+	setVerbose(enabled: boolean): void {
+		// Turning verbose off mid-reasoning drops the partial block rather than emitting
+		// half a thought after the user asked for silence.
+		if (!enabled) {
+			this.thinkBuf = "";
+			this.thinkingOpen = false;
+		}
+		this.verbose = enabled;
+	}
+
+	getVerbose(): boolean {
+		return this.verbose;
 	}
 
 	handle(event: AgentSessionEvent): void {
@@ -120,6 +152,7 @@ class AccessibleEventRenderer implements EventRenderer {
 	endTurn(): void {
 		this.flushBashRun();
 		this.flushFileRun();
+		this.flushThinking();
 		this.flushText();
 	}
 
@@ -128,59 +161,111 @@ class AccessibleEventRenderer implements EventRenderer {
 	private handleAssistantEvent(event: AssistantMessageEvent): void {
 		switch (event.type) {
 			case "start":
-				// A new assistant message begins; flush any leftover text from the previous one.
+				// A new assistant message begins; flush any leftover prose from the previous one.
+				this.flushThinking();
 				this.flushText();
 				break;
 			case "text_delta":
 				this.appendText(event.delta);
 				break;
+			case "thinking_delta":
+				// Reasoning is clutter for most turns, so it is dropped unless /verbose is on.
+				if (this.verbose) {
+					this.appendThinking(event.delta);
+				}
+				break;
+			case "thinking_end":
+				// Flushed unconditionally: the buffer is empty when verbose is off, and this
+				// also closes a block that was still streaming when verbose was turned on.
+				this.flushThinking();
+				break;
 			case "text_end":
 			case "done":
+				this.flushThinking();
 				this.flushText();
 				break;
 			case "error": {
+				this.flushThinking();
 				this.flushText();
 				const message = event.error?.errorMessage ?? event.reason ?? "request failed";
 				this.writer.error(`Error: ${message}`);
 				break;
 			}
 			default:
-				// thinking_* and toolcall_* are intentionally ignored.
+				// thinking_start / thinking_signature and toolcall_* are intentionally ignored:
+				// the reasoning block announces itself on its first delta.
 				break;
 		}
 	}
 
 	private appendText(delta: string): void {
-		// Assistant text follows any pending tool group, in reading order.
+		// Assistant text follows any pending tool group or reasoning block, in reading order.
 		this.flushBashRun();
 		this.flushFileRun();
-		this.textBuf += delta;
-		// Block mode: hold the whole message; flushText emits it at once on message end.
+		this.flushThinking();
+		this.textBuf = this.appendProse(this.writer, this.textBuf, delta);
+	}
+
+	private appendThinking(delta: string): void {
+		// Reasoning comes before the text and tool activity of the same message; flush
+		// whatever preceded it so reading order holds.
+		this.flushBashRun();
+		this.flushFileRun();
+		this.flushText();
+		// One marker per block, on the block's first delta rather than on `thinking_start`,
+		// so providers that stream reasoning without a start event are still labeled.
+		if (!this.thinkingOpen) {
+			this.thinkingOpen = true;
+			this.thinkingWriter.line("Thinking.");
+		}
+		this.thinkBuf = this.appendProse(this.thinkingWriter, this.thinkBuf, delta);
+	}
+
+	/**
+	 * Add a prose delta to `buf`, emitting each completed line, and return what is left
+	 * unflushed. Assistant text and reasoning are separate streams over the same rules:
+	 * in block mode nothing is emitted until the stream is flushed, and a newline-free
+	 * stream is cut loose at `MAX_BUFFERED_LINE` so it cannot buffer forever.
+	 */
+	private appendProse(writer: LineWriter, buf: string, delta: string): string {
+		let pending = buf + delta;
 		if (this.blockOutput) {
-			return;
+			return pending;
 		}
-		let newlineIndex = this.textBuf.indexOf("\n");
+		let newlineIndex = pending.indexOf("\n");
 		while (newlineIndex !== -1) {
-			this.writer.line(this.textBuf.slice(0, newlineIndex));
-			this.textBuf = this.textBuf.slice(newlineIndex + 1);
-			newlineIndex = this.textBuf.indexOf("\n");
+			writer.line(pending.slice(0, newlineIndex));
+			pending = pending.slice(newlineIndex + 1);
+			newlineIndex = pending.indexOf("\n");
 		}
-		// Progressively flush a newline-free stream so it does not buffer forever.
-		if (this.textBuf.length >= MAX_BUFFERED_LINE) {
-			this.writer.line(this.textBuf);
-			this.textBuf = "";
+		if (pending.length >= MAX_BUFFERED_LINE) {
+			writer.line(pending);
+			pending = "";
 		}
+		return pending;
 	}
 
 	private flushText(): void {
-		if (this.textBuf.length === 0) {
+		const buf = this.textBuf;
+		this.textBuf = "";
+		this.writeProse(this.writer, buf);
+	}
+
+	private flushThinking(): void {
+		const buf = this.thinkBuf;
+		this.thinkBuf = "";
+		this.thinkingOpen = false;
+		this.writeProse(this.thinkingWriter, buf);
+	}
+
+	/** Emit a buffered stream as one write (a whole block in block mode), sans trailing blanks. */
+	private writeProse(writer: LineWriter, buf: string): void {
+		if (buf.length === 0) {
 			return;
 		}
-		// Emit the buffer as one write (a whole block in block mode); drop trailing blank lines.
-		const text = this.textBuf.replace(/\n+$/, "");
-		this.textBuf = "";
+		const text = buf.replace(/\n+$/, "");
 		if (text.length > 0) {
-			this.writer.line(text);
+			writer.line(text);
 		}
 	}
 
@@ -308,6 +393,7 @@ class AccessibleEventRenderer implements EventRenderer {
 	private flushPending(): void {
 		this.flushBashRun();
 		this.flushFileRun();
+		this.flushThinking();
 		this.flushText();
 	}
 
@@ -458,6 +544,11 @@ function extractResultText(result: unknown): string {
 }
 
 export function createEventRenderer(writer: LineWriter, options: EventRendererOptions = {}): EventRenderer {
-	// `verbose` is reserved for future diagnostics; the renderer never surfaces model thinking.
-	return new AccessibleEventRenderer(writer, options.blockOutput ?? false);
+	// Reasoning stays hidden unless the caller opts in (--verbose) or the user does (/verbose).
+	return new AccessibleEventRenderer(
+		writer,
+		options.thinkingWriter ?? writer,
+		options.blockOutput ?? false,
+		options.verbose ?? false,
+	);
 }

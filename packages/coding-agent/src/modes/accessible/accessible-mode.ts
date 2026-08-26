@@ -19,6 +19,7 @@ import { createNodeReadlinePrompter, InputClosedError, QuestionAbortedError } fr
 import { runResumeReplay } from "./resume-replay.ts";
 import { createTextUIContext } from "./text-ui-context.ts";
 import { createTranscriptRecorder, readTranscriptLines } from "./transcript.ts";
+import { createTurnUsageCollector, formatTurnSummary } from "./turn-summary.ts";
 import type { AccessibleModeOptions, LineWriter, Prompter } from "./types.ts";
 
 export type { AccessibleModeOptions } from "./types.ts";
@@ -45,6 +46,9 @@ export async function runAccessibleMode(
 	let unsubscribe: (() => void) | undefined;
 	let disposed = false;
 	const planMode = createPlanMode();
+	// Fed from the session subscription below so the end-of-turn line can report the
+	// cache-hit rate across every provider request the turn made.
+	const turnUsage = createTurnUsageCollector();
 
 	// Tab completion for the readline prompt: command names, command arguments, and
 	// file/path tokens. Closures read the current (rebindable) session at Tab time.
@@ -54,6 +58,8 @@ export async function runAccessibleMode(
 				return session.supportsThinking() ? [...session.getAvailableThinkingLevels()] : [];
 			case "stream":
 				return ["block", "line"];
+			case "verbose":
+				return ["on", "off"];
 			case "help":
 				return COMMAND_NAMES;
 			case "model":
@@ -75,6 +81,10 @@ export async function runAccessibleMode(
 	const renderer = createEventRenderer(recorder.wrapWriter(writer), {
 		verbose: options.verbose,
 		blockOutput: options.blockOutput,
+		// Reasoning is spoken through the plain writer: it is bulk rather than conversation,
+		// so a resume replay must not read back the thinking of a turn recorded while
+		// /verbose happened to be on.
+		thinkingWriter: writer,
 	});
 
 	const dispose = async (): Promise<void> => {
@@ -118,7 +128,10 @@ export async function runAccessibleMode(
 			},
 		});
 		unsubscribe?.();
-		unsubscribe = session.subscribe((event) => renderer.handle(event));
+		unsubscribe = session.subscribe((event) => {
+			turnUsage.handle(event);
+			renderer.handle(event);
+		});
 	};
 
 	runtime.setRebindSession(async () => {
@@ -209,6 +222,13 @@ export async function runAccessibleMode(
 		recorder.recordUserMessage(text);
 		// It is now the model's turn: keystrokes typed before it finishes ring the bell.
 		prompter.setTurnActive(true);
+		turnUsage.reset();
+		// One spoken line opening the turn, so the user hears that the assistant has taken
+		// over before any of its output arrives, and which mode it is working under.
+		// Written with the plain writer, not the recorder: like the end-of-turn line it
+		// describes this run, so replaying it on a later resume would be noise.
+		writer.line(planMode.isActive() ? "Planning." : "Working.");
+		const startedAt = Date.now();
 		try {
 			// In plan mode, prefix the plan directive so the model produces a plan
 			// rather than acting (the tool restriction is enforced separately).
@@ -222,7 +242,9 @@ export async function runAccessibleMode(
 		if (interrupted) {
 			writer.line("[interrupted]");
 		}
-		// No end-of-turn marker: the next prompt (prefixed with a blank line) separates turns.
+		// The one end-of-turn line. Written with the plain writer, not the recorder: it
+		// describes this run, so replaying stale timings on a later resume would mislead.
+		writer.line(formatTurnSummary(Date.now() - startedAt, session.getContextUsage(), turnUsage.total()));
 	};
 
 	// --- banner + initial messages ------------------------------------------

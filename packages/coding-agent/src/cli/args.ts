@@ -286,7 +286,8 @@ ${chalk.bold("Options:")}
   --no-context-files, -nc        Disable AGENTS.md and CLAUDE.md discovery and loading
   --export <file>                Export session file to HTML and exit
   --list-models [search]         List available models (with optional fuzzy search)
-  --verbose                      Force verbose startup (overrides quietStartup setting)
+  --verbose                      Force verbose startup (overrides quietStartup setting);
+                                 in accessible mode also prints the model's reasoning
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run
   --offline                      Disable startup network operations (same as PI_OFFLINE=1)

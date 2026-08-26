@@ -2684,7 +2684,8 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/quit") {
+			// ":q" is accepted alongside /quit for vim muscle memory.
+			if (text === "/quit" || text === ":q") {
 				this.editor.setText("");
 				await this.shutdown();
 				return;

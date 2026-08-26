@@ -55,7 +55,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/reload` | Reload keybindings, extensions, skills, prompts, and context files |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
-| `/quit` | Quit pi |
+| `/quit` (or `:q`) | Quit pi |
 
 ## Message Queue
 
