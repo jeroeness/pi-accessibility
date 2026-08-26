@@ -39,6 +39,36 @@ describe("runAccessibleMode (end to end)", () => {
 		harness.cleanup();
 	});
 
+	it("closes each turn with a summary line carrying time, context, and cache hits", async () => {
+		const harness = createHarness({ responses: ["Hello there"] });
+		const runtime = {
+			session: harness.session,
+			cwd: harness.tempDir,
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setRebindSession: vi.fn(),
+			newSession: vi.fn().mockResolvedValue({ cancelled: false }),
+			fork: vi.fn().mockResolvedValue({ cancelled: false }),
+			switchSession: vi.fn().mockResolvedValue({ cancelled: false }),
+		} as unknown as AgentSessionRuntime;
+
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(["hello", "/quit"]);
+
+		await runAccessibleMode(
+			runtime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		const summaries = rec.lines.filter((line) => line.startsWith("Turn: "));
+		expect(summaries).toHaveLength(1);
+		expect(summaries[0]).toMatch(/^Turn: \d+ seconds?\./);
+		// The reply itself is printed before the summary that describes it.
+		expect(rec.lines.indexOf("Hello there")).toBeLessThan(rec.lines.indexOf(summaries[0]));
+
+		harness.cleanup();
+	});
+
 	it("marks the turn active around a prompt so out-of-turn keystrokes ring the bell", async () => {
 		const harness = createHarness({ responses: ["Hello there"] });
 		const runtime = {
@@ -91,6 +121,37 @@ describe("runAccessibleMode (end to end)", () => {
 		harness.cleanup();
 	});
 
+	it("opens each turn with Working., or Planning. while plan mode is on", async () => {
+		const harness = createHarness({ responses: ["Hello there", "Plan: 1. look around"] });
+		const runtime = {
+			session: harness.session,
+			cwd: harness.tempDir,
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setRebindSession: vi.fn(),
+			newSession: vi.fn().mockResolvedValue({ cancelled: false }),
+			fork: vi.fn().mockResolvedValue({ cancelled: false }),
+			switchSession: vi.fn().mockResolvedValue({ cancelled: false }),
+		} as unknown as AgentSessionRuntime;
+
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(["hello", "/plan", "how would you do it", "/quit"]);
+
+		await runAccessibleMode(
+			runtime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		// One marker per turn, in mode order: build mode first, then plan mode.
+		expect(rec.lines.filter((line) => line === "Working." || line === "Planning.")).toEqual([
+			"Working.",
+			"Planning.",
+		]);
+		// The marker opens the turn: it precedes the reply and the closing summary.
+		expect(rec.lines.indexOf("Working.")).toBeLessThan(rec.lines.indexOf("Hello there"));
+		harness.cleanup();
+	});
+
 	it("shows the no-model banner and uses the ^ prompt", async () => {
 		const { runtime } = makeStubRuntime({ model: undefined });
 		const rec = createRecordingWriter();
@@ -126,6 +187,7 @@ function makeStubRuntime(sessionOverrides: Record<string, unknown>): {
 		reload: vi.fn().mockResolvedValue(undefined),
 		prompt: vi.fn().mockResolvedValue(undefined),
 		abort: vi.fn().mockResolvedValue(undefined),
+		getContextUsage: vi.fn().mockReturnValue(undefined),
 	};
 	// Copy descriptors (not a spread) so getters like `isStreaming` stay live.
 	Object.defineProperties(session, Object.getOwnPropertyDescriptors(sessionOverrides));

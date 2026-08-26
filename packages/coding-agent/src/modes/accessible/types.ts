@@ -20,7 +20,10 @@ export interface AccessibleModeOptions {
 	initialImages?: ImageContent[];
 	/** Additional messages to send (in order) after the initial message. */
 	initialMessages?: string[];
-	/** Affects error/diagnostic verbosity only. NEVER surfaces model thinking. */
+	/**
+	 * Start with the model's reasoning printed. Off by default — reasoning is clutter on
+	 * most turns — and toggled at runtime with /verbose.
+	 */
 	verbose?: boolean;
 	/**
 	 * When true, buffer each assistant message and emit it as a single block instead of
@@ -91,6 +94,10 @@ export interface EventRenderer {
 	setBlockOutput(enabled: boolean): void;
 	/** Whether block streaming is currently enabled. */
 	getBlockOutput(): boolean;
+	/** Print the model's reasoning (true) vs drop it (false). */
+	setVerbose(enabled: boolean): void;
+	/** Whether the model's reasoning is currently printed. */
+	getVerbose(): boolean;
 }
 
 /** Result of dispatching a slash command. */
@@ -108,7 +115,7 @@ export interface CommandContext {
 	runtime: AgentSessionRuntime;
 	writer: LineWriter;
 	prompter: Prompter;
-	/** The active event renderer (for the /stream toggle). */
+	/** The active event renderer (for the /stream and /verbose toggles). */
 	renderer: EventRenderer;
 	/** Plan/build mode toggle (for the /plan and /build commands). */
 	planMode: PlanModeController;

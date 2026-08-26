@@ -28,19 +28,35 @@ TERM=dumb pi           # auto-detected
 
 - **Append-only, no repaint.** Output is written top-to-bottom in the order things happen.
   Nothing is ever redrawn in place, so a screen reader never re-reads changed content.
-- **No spinners or animation, and no status counters.** Progress is conveyed with discrete
-  lines (`» tool …`, `✓ / ✗`) rather than a moving indicator; the token/TPS/cache counters
-  from the graphical footer are not shown.
+- **No spinners or animation, and no live counters.** Progress is conveyed with discrete
+  lines (`» tool …`, `✓ / ✗`) rather than a moving indicator, and the continuously updating
+  token/TPS/cache counters from the graphical footer are not shown. Those numbers are
+  reported once instead, in the end-of-turn summary described below.
 - **Text, not color.** Every state is labeled in words (`Error:`, `[interrupted]`). ANSI
   escape codes are stripped from all output.
-- **Model thinking is not shown**, and tool output is summarized rather than dumped:
-  consecutive file operations are grouped by type (`» read: a.ts, b.ts`), and `bash`
-  calls are reduced to `bash <command> <ok|failed>`, grouping a run of the same
-  command with a count (`bash grep (5) ok`). The reported command is the first
-  informative word, skipping navigation and wrapper prefixes so `cd pkg && grep …`
-  reads as `bash grep ok`, not `bash cd ok`. Command arguments and output are not shown.
-- **Minimal chrome.** Responses are printed directly (no `Assistant:` header) and there is
-  no end-of-turn marker — the `^` prompt simply returns when it is your turn to type.
+- **Model reasoning is not shown** unless you ask for it. `/verbose` toggles it on and
+  off (off at startup, or on from the start with `--verbose`): when on, each reasoning
+  block is opened with a `Thinking.` line and then streams like any other reply text.
+  Reasoning is never written to the resume transcript, so a replay does not read back
+  the thinking of an earlier verbose turn.
+- **Tool output is summarized rather than dumped.** Consecutive file operations are
+  grouped by type (`» read: a.ts, b.ts`), and `bash` calls are reduced to
+  `bash <command> <ok|failed>`, grouping a run of the same command with a count
+  (`bash grep (5) ok`). The reported command is the first informative word, skipping
+  navigation and wrapper prefixes so `cd pkg && grep …` reads as `bash grep ok`, not
+  `bash cd ok`. Command arguments and output are not shown.
+- **Minimal chrome.** Responses are printed directly (no `Assistant:` header). Each turn
+  opens with one word confirming the model has taken over — `Working.` normally, or
+  `Planning.` while plan mode is on — so the wait is announced before any reply arrives.
+  Each turn then closes with one summary line, after which the `^` prompt returns for your
+  next message:
+  `Turn: 12 seconds. Context: 34k of 200k tokens (17 percent). Cache hits: 95 percent.`
+  The cache-hit rate covers every provider request the turn made, not just the last one.
+  Facts the session cannot supply are left out rather than reported as zero: no context
+  clause without a model, and no cache clause when the turn never reached the provider or
+  when the provider reports no cache activity at all (several do not report it, and a
+  permanent `Cache hits: 0 percent` would read as a broken counter).
+  Neither line is recorded in the resume transcript — both describe one live run.
 - **Out-of-turn typing bell.** While the model is still responding, typing rings the
   terminal bell on every keystroke to signal that it is not yet your turn. The bell
   stops as soon as a prompt or question is waiting for your input.
@@ -54,6 +70,7 @@ Directory: /home/you/project
 Type your message and press Enter. Type /help for commands, /quit to exit.
 
 ^ add a -V alias for --version and run the arg tests
+Working.
 I'll read the file, add the alias, then run the tests.
 
 » read: args.ts
@@ -61,6 +78,7 @@ I'll read the file, add the alias, then run the tests.
 bash npm ok
 
 Done. Added -V alongside --version; the arg-parser tests pass (12 of 12).
+Turn: 41 seconds. Context: 18k of 200k tokens (9 percent). Cache hits: 87 percent.
 
 ^
 ```
@@ -78,11 +96,13 @@ to select a model.` — run `/login` to sign in.
 | `/model [pattern]` | Show the current model, or switch it (numbered list, or match by pattern). |
 | `/compact [notes]` | Summarize and shrink the conversation context. |
 | `/session` | Show session info and stats. |
+| `/usage` | Show the remaining GitHub Copilot premium request quota (also accepted as `/token`). |
 | `/stream [block\|line]` | Show or switch how replies stream (see below). |
+| `/verbose [on\|off]` | Show or switch whether the model's reasoning is printed (off by default; no argument toggles). |
 | `/new` | Start a fresh session. |
 | `/resume [number]` | List up to 10 recent sessions in this project and resume one by number. |
 | `/resumeglobal [number]` | Like `/resume`, but list recent sessions across all projects. |
-| `/quit` (or Ctrl+D) | Exit. |
+| `/quit` (or Ctrl+D, or `:q`) | Exit. |
 
 ### Streaming mode: line vs block
 

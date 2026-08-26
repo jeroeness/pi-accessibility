@@ -35,6 +35,13 @@ function thinkingDelta(delta: string): AgentSessionEvent {
 		assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta, partial: {} },
 	} as unknown as AgentSessionEvent;
 }
+function thinkingEnd(): AgentSessionEvent {
+	return {
+		type: "message_update",
+		message: {},
+		assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: "", partial: {} },
+	} as unknown as AgentSessionEvent;
+}
 function toolStart(toolCallId: string, toolName: string, args: unknown): AgentSessionEvent {
 	return { type: "tool_execution_start", toolCallId, toolName, args } as unknown as AgentSessionEvent;
 }
@@ -88,6 +95,76 @@ describe("thinking", () => {
 		const lines = render([textStart(), thinkingDelta("secret reasoning"), textDelta("visible\n"), textEnd()]);
 		expect(lines).toEqual(["visible"]);
 		expect(lines.join("\n")).not.toContain("secret");
+	});
+
+	it("drops thinking even when it is the only content of the turn", () => {
+		expect(render([textStart(), thinkingDelta("just musing\n"), thinkingEnd()])).toEqual([]);
+	});
+
+	it("prints reasoning behind a Thinking. marker when verbose is on", () => {
+		const rec = createRecordingWriter();
+		const renderer = createEventRenderer(rec.writer, { verbose: true });
+		renderer.handle(textStart());
+		renderer.handle(thinkingDelta("first thought\nsecond thought\n"));
+		renderer.handle(thinkingEnd());
+		renderer.handle(textDelta("the answer\n"));
+		renderer.handle(textEnd());
+		// The marker opens the block once, then reasoning streams line by line, then the reply.
+		expect(rec.lines).toEqual(["Thinking.", "first thought", "second thought", "the answer"]);
+	});
+
+	it("re-announces each reasoning block and keeps reasoning ahead of tool lines", () => {
+		const rec = createRecordingWriter();
+		const renderer = createEventRenderer(rec.writer, { verbose: true });
+		renderer.handle(thinkingDelta("look first\n"));
+		renderer.handle(thinkingEnd());
+		renderer.handle(toolStart("1", "read", { path: "src/args.ts" }));
+		renderer.handle(toolEnd("1", "read", textResult("...")));
+		renderer.handle(thinkingDelta("now decide\n"));
+		renderer.handle(thinkingEnd());
+		renderer.handle(textDelta("done\n"));
+		renderer.endTurn();
+		expect(rec.lines).toEqual(["Thinking.", "look first", "» read: args.ts.", "Thinking.", "now decide", "done"]);
+	});
+
+	it("holds a whole reasoning block in block mode", () => {
+		const rec = createRecordingWriter();
+		const renderer = createEventRenderer(rec.writer, { verbose: true, blockOutput: true });
+		renderer.handle(thinkingDelta("line one\nline two\n"));
+		expect(rec.lines).toEqual(["Thinking."]);
+		renderer.handle(thinkingEnd());
+		expect(rec.lines).toEqual(["Thinking.", "line one\nline two"]);
+	});
+
+	it("toggles at runtime, and turning it off drops the block still streaming", () => {
+		const rec = createRecordingWriter();
+		const renderer = createEventRenderer(rec.writer); // reasoning hidden by default
+		expect(renderer.getVerbose()).toBe(false);
+		renderer.handle(thinkingDelta("hidden\n"));
+		expect(rec.lines).toEqual([]);
+
+		renderer.setVerbose(true);
+		expect(renderer.getVerbose()).toBe(true);
+		renderer.handle(thinkingDelta("shown"));
+		renderer.setVerbose(false);
+		// The partial line buffered while verbose was on is dropped, not spoken late.
+		renderer.handle(thinkingEnd());
+		renderer.handle(textDelta("reply\n"));
+		renderer.endTurn();
+		expect(rec.lines).toEqual(["Thinking.", "reply"]);
+	});
+
+	it("sends reasoning to the thinking writer so it stays out of the recorded transcript", () => {
+		const spoken = createRecordingWriter();
+		const recorded = createRecordingWriter();
+		// Mirrors accessible mode: the main writer is the recorded one, reasoning is not.
+		const renderer = createEventRenderer(recorded.writer, { verbose: true, thinkingWriter: spoken.writer });
+		renderer.handle(thinkingDelta("private reasoning\n"));
+		renderer.handle(thinkingEnd());
+		renderer.handle(textDelta("public answer\n"));
+		renderer.endTurn();
+		expect(spoken.lines).toEqual(["Thinking.", "private reasoning"]);
+		expect(recorded.lines).toEqual(["public answer"]);
 	});
 });
 

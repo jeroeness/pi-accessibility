@@ -10,8 +10,8 @@ import type { Model } from "@earendil-works/pi-ai";
 import { type SessionInfo, SessionManager } from "../../core/session-manager.ts";
 import { runLogin, runLogout } from "./login.ts";
 import { modelLabel } from "./model-label.ts";
-import { handleTokenQuota } from "./token-quota.ts";
 import type { CommandContext, CommandResult } from "./types.ts";
+import { handleUsage } from "./usage.ts";
 
 const COMMAND_HELP: Record<string, string> = {
 	help: "/help [command]. Show available commands, or explain a specific command.",
@@ -24,20 +24,32 @@ const COMMAND_HELP: Record<string, string> = {
 	build: "/build. Leave plan mode and restore full tool access (edit, write, bash).",
 	compact: "/compact [notes]. Summarize and shrink the conversation context. Optional notes guide the summary.",
 	session: "/session. Show session info and stats including model, token counts, and message totals.",
-	token: "/token quota. Show the remaining GitHub Copilot premium request quota for your subscription.",
+	usage: "/usage. Show the remaining GitHub Copilot premium request quota for your subscription.",
 	stream:
 		"/stream [block|line]. Show or set how replies stream. Block emits the whole reply at once; line streams line by line.",
+	verbose:
+		"/verbose [on|off]. Show or set whether the model's reasoning is printed. Off by default; without an argument, toggles it.",
 	new: "/new. Start a fresh session.",
 	resume:
 		"/resume [number]. List up to 10 recent sessions in this project and resume one by number. With a number, resume that session directly. Blank or invalid input does not resume.",
 	resumeglobal: "/resumeglobal [number]. Like /resume, but list recent sessions across all projects.",
-	quit: "/quit (or Ctrl+D). Exit.",
+	quit: "/quit (or Ctrl+D, or :q). Exit.",
 };
 
 /** Built-in command names (without the leading slash), used for Tab completion. */
 export const COMMAND_NAMES: string[] = Object.keys(COMMAND_HELP);
 
-const COMMANDS_SUMMARY = `/help. /login. /logout. /model. /effort. /plan. /build. /compact. /session. /token quota. /stream. /new. /resume. /resumeglobal. /quit.`;
+/**
+ * Hidden synonyms, mapped to the command they resolve to. Deliberately absent from
+ * COMMAND_HELP so they stay out of the summary and Tab completion, while still being
+ * dispatched and explained by /help.
+ */
+const COMMAND_ALIASES: Record<string, string> = {
+	exit: "quit",
+	token: "usage",
+};
+
+const COMMANDS_SUMMARY = `/help. /login. /logout. /model. /effort. /plan. /build. /compact. /session. /usage. /stream. /verbose. /new. /resume. /resumeglobal. /quit.`;
 
 /**
  * Dispatch a submitted line. Returns `sendAsPrompt` for non-commands and for
@@ -45,27 +57,35 @@ const COMMANDS_SUMMARY = `/help. /login. /logout. /model. /effort. /plan. /build
  */
 export async function dispatchCommand(line: string, ctx: CommandContext): Promise<CommandResult> {
 	const trimmed = line.trim();
+	// Vim muscle memory: ":q" exits, like /quit or Ctrl+D. Checked before the slash test
+	// below because it is not a slash command.
+	if (trimmed === ":q") {
+		return { kind: "exit", code: 0 };
+	}
 	if (!trimmed.startsWith("/")) {
 		return { kind: "sendAsPrompt" };
 	}
 
 	const spaceIndex = trimmed.indexOf(" ");
-	const name = (spaceIndex === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIndex)).toLowerCase();
+	const typed = (spaceIndex === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIndex)).toLowerCase();
+	const name = COMMAND_ALIASES[typed] ?? typed;
 	const rest = spaceIndex === -1 ? "" : trimmed.slice(spaceIndex + 1).trim();
 
 	switch (name) {
-		case "help":
-			if (rest && COMMAND_HELP[rest.toLowerCase()]) {
-				ctx.writer.line(COMMAND_HELP[rest.toLowerCase()]);
+		case "help": {
+			const topic = rest.toLowerCase();
+			const resolved = COMMAND_ALIASES[topic] ?? topic;
+			if (rest && COMMAND_HELP[resolved]) {
+				ctx.writer.line(COMMAND_HELP[resolved]);
 			} else if (rest) {
 				ctx.writer.line(`Unknown command: /${rest}. ${COMMANDS_SUMMARY}`);
 			} else {
 				ctx.writer.line(COMMANDS_SUMMARY);
 			}
 			return { kind: "handled" };
+		}
 
 		case "quit":
-		case "exit":
 			return { kind: "exit", code: 0 };
 
 		case "new":
@@ -112,20 +132,26 @@ export async function dispatchCommand(line: string, ctx: CommandContext): Promis
 			handleSession(ctx);
 			return { kind: "handled" };
 
-		case "token":
-			await handleTokenQuota(ctx);
+		case "usage":
+			// Everything after the command is ignored, so the `/token quota` spelling this
+			// replaced still works.
+			await handleUsage(ctx);
 			return { kind: "handled" };
 
 		case "stream":
 			handleStream(ctx, rest);
 			return { kind: "handled" };
 
+		case "verbose":
+			handleVerbose(ctx, rest);
+			return { kind: "handled" };
+
 		default:
 			// Extension-registered commands are consumed by the agent as a prompt.
-			if (ctx.session.extensionRunner.getCommand(name)) {
+			if (ctx.session.extensionRunner.getCommand(typed)) {
 				return { kind: "sendAsPrompt" };
 			}
-			ctx.writer.line(`Unknown command: /${name}. Type /help.`);
+			ctx.writer.line(`Unknown command: /${typed}. Type /help.`);
 			return { kind: "handled" };
 	}
 }
@@ -269,6 +295,32 @@ function handleBuild(ctx: CommandContext): void {
 	}
 	ctx.planMode.exit(ctx.session);
 	ctx.writer.line("Build mode on. Full tool access restored (edit, write, bash).");
+}
+
+/**
+ * Show or set whether the model's reasoning is spoken. A bare `/verbose` flips the
+ * current state, so the toggle needs no argument to be useful; `on`/`off` set it
+ * explicitly for scripted use and for users who would rather not track the state.
+ */
+function handleVerbose(ctx: CommandContext, arg: string): void {
+	const value = arg.trim().toLowerCase();
+	let enabled: boolean;
+	if (value === "on" || value === "true") {
+		enabled = true;
+	} else if (value === "off" || value === "false") {
+		enabled = false;
+	} else if (value === "") {
+		enabled = !ctx.renderer.getVerbose();
+	} else {
+		ctx.writer.line(
+			`Verbose: ${ctx.renderer.getVerbose() ? "on" : "off"}. Usage: /verbose on|off, or /verbose to toggle.`,
+		);
+		return;
+	}
+	ctx.renderer.setVerbose(enabled);
+	ctx.writer.line(
+		enabled ? "Verbose: on (the model's reasoning is printed)." : "Verbose: off (the model's reasoning is hidden).",
+	);
 }
 
 function handleStream(ctx: CommandContext, arg: string): void {
