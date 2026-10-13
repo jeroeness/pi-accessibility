@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
 import { runAccessibleMode } from "../src/modes/accessible/accessible-mode.ts";
 import { createFakePrompter, createRecordingWriter, tick } from "./accessible-test-support.ts";
-import { createHarness } from "./test-harness.ts";
+import { createHarness, createHarnessWithExtensions } from "./test-harness.ts";
 
 describe("runAccessibleMode (end to end)", () => {
 	it("renders a full turn as a clean linear transcript and exits on /quit", async () => {
@@ -454,6 +454,42 @@ describe("runAccessibleMode plan mode", () => {
 		expect(second.session.getActiveToolNames()).toEqual(expect.arrayContaining(["read", "bash", "edit", "write"]));
 		first.cleanup();
 		second.cleanup();
+	});
+
+	it("dispatches extension commands with their raw args, without the plan directive", async () => {
+		const calls: string[] = [];
+		const harness = await createHarnessWithExtensions({
+			responses: ["should never be requested"],
+			extensionFactories: [
+				(pi) => {
+					pi.registerCommand("ext", {
+						description: "Test command",
+						handler: async (args) => {
+							calls.push(args);
+						},
+					});
+				},
+			],
+		});
+		const runtime = {
+			session: harness.session,
+			cwd: harness.tempDir,
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setRebindSession: vi.fn(),
+		} as unknown as AgentSessionRuntime;
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(["/plan", "/ext login github", "/ext", "/quit"]);
+
+		await runAccessibleMode(
+			runtime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		expect(calls).toEqual(["login github", ""]);
+		expect(harness.faux.callCount).toBe(0);
+		expect(rec.lines).not.toContain("Planning.");
+		harness.cleanup();
 	});
 
 	it("the session tool-call guard blocks an active tool before it runs", async () => {

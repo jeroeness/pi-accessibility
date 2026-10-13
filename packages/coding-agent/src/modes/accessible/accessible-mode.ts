@@ -258,7 +258,16 @@ export async function runAccessibleMode(
 		// over before any of its output arrives, and which mode it is working under.
 		// Written with the plain writer, not the recorder: like the end-of-turn line it
 		// describes this run, so replaying it on a later resume would be noise.
-		writer.line(planMode.isActive() ? "Planning." : "Working.");
+		// Extension commands run their handler with the raw arguments, so plan mode neither
+		// announces planning nor appends its directive (which would land in the arguments).
+		// Parsed like AgentSession._tryExecuteExtensionCommand: the name ends at the first space.
+		const spaceIndex = text.indexOf(" ");
+		const isExtensionCommand =
+			text.startsWith("/") &&
+			session.extensionRunner.getCommand(spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex)) !==
+				undefined;
+		const planning = planMode.isActive() && !isExtensionCommand;
+		writer.line(planning ? "Planning." : "Working.");
 		const startedAt = Date.now();
 		turnRunning = true;
 		try {
@@ -268,7 +277,7 @@ export async function runAccessibleMode(
 			planMode.enforce(session);
 			// followUp only applies while a run the REPL did not start (e.g. an extension's)
 			// is streaming: the message is queued after it instead of being rejected.
-			await session.prompt(planMode.decorate(text), {
+			await session.prompt(planning ? planMode.decorate(text) : text, {
 				streamingBehavior: "followUp",
 				...(images ? { images } : {}),
 			});
