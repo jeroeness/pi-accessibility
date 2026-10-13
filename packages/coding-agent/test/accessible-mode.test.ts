@@ -1,12 +1,14 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
 import { runAccessibleMode } from "../src/modes/accessible/accessible-mode.ts";
 import { createFakePrompter, createRecordingWriter, tick } from "./accessible-test-support.ts";
-import { createHarness } from "./test-harness.ts";
+import { createHarness, createHarnessWithExtensions } from "./test-harness.ts";
 
 describe("runAccessibleMode (end to end)", () => {
 	it("renders a full turn as a clean linear transcript and exits on /quit", async () => {
-		const harness = createHarness({ responses: ["Hello there"] });
+		const harness = await createHarness({ responses: ["Hello there"] });
 		const runtime = {
 			session: harness.session,
 			cwd: harness.tempDir,
@@ -40,7 +42,7 @@ describe("runAccessibleMode (end to end)", () => {
 	});
 
 	it("closes each turn with a summary line carrying time, context, and cache hits", async () => {
-		const harness = createHarness({ responses: ["Hello there"] });
+		const harness = await createHarness({ responses: ["Hello there"] });
 		const runtime = {
 			session: harness.session,
 			cwd: harness.tempDir,
@@ -70,7 +72,7 @@ describe("runAccessibleMode (end to end)", () => {
 	});
 
 	it("marks the turn active around a prompt so out-of-turn keystrokes ring the bell", async () => {
-		const harness = createHarness({ responses: ["Hello there"] });
+		const harness = await createHarness({ responses: ["Hello there"] });
 		const runtime = {
 			session: harness.session,
 			cwd: harness.tempDir,
@@ -96,7 +98,7 @@ describe("runAccessibleMode (end to end)", () => {
 	});
 
 	it("block-output mode emits a multi-line reply as a single block", async () => {
-		const harness = createHarness({ responses: ["line one\nline two"] });
+		const harness = await createHarness({ responses: ["line one\nline two"] });
 		const runtime = {
 			session: harness.session,
 			cwd: harness.tempDir,
@@ -122,7 +124,7 @@ describe("runAccessibleMode (end to end)", () => {
 	});
 
 	it("opens each turn with Working., or Planning. while plan mode is on", async () => {
-		const harness = createHarness({ responses: ["Hello there", "Plan: 1. look around"] });
+		const harness = await createHarness({ responses: ["Hello there", "Plan: 1. look around"] });
 		const runtime = {
 			session: harness.session,
 			cwd: harness.tempDir,
@@ -149,6 +151,63 @@ describe("runAccessibleMode (end to end)", () => {
 		]);
 		// The marker opens the turn: it precedes the reply and the closing summary.
 		expect(rec.lines.indexOf("Working.")).toBeLessThan(rec.lines.indexOf("Hello there"));
+		harness.cleanup();
+	});
+
+	it("quits on :q typed at the main prompt instead of sending it to the model", async () => {
+		// Regression: the loop only dispatched lines starting with "/", so ":q" was
+		// submitted as a prompt. dispatchCommand() unit tests could not catch that.
+		const harness = await createHarness({ responses: ["Hello there", "should never be requested"] });
+		const runtime = {
+			session: harness.session,
+			cwd: harness.tempDir,
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setRebindSession: vi.fn(),
+			newSession: vi.fn().mockResolvedValue({ cancelled: false }),
+			fork: vi.fn().mockResolvedValue({ cancelled: false }),
+			switchSession: vi.fn().mockResolvedValue({ cancelled: false }),
+		} as unknown as AgentSessionRuntime;
+
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(["hello", " :q ", "typed after quitting"]);
+
+		const code = await runAccessibleMode(
+			runtime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		expect(code).toBe(0);
+		// Only the first line reached the model.
+		expect(harness.faux.callCount).toBe(1);
+		expect(rec.lines.filter((line) => line === "Working.")).toHaveLength(1);
+		// The loop stopped at :q and never asked for the next line.
+		expect(fake.prompts.filter((prompt) => prompt.includes("^"))).toHaveLength(2);
+		harness.cleanup();
+	});
+
+	it("sends the screen-reader output rules to the model", async () => {
+		const harness = await createHarness({ responses: ["Hello there"] });
+		const runtime = {
+			session: harness.session,
+			cwd: harness.tempDir,
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setRebindSession: vi.fn(),
+			newSession: vi.fn().mockResolvedValue({ cancelled: false }),
+			fork: vi.fn().mockResolvedValue({ cancelled: false }),
+			switchSession: vi.fn().mockResolvedValue({ cancelled: false }),
+		} as unknown as AgentSessionRuntime;
+
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(["hello", "/quit"]);
+		await runAccessibleMode(
+			runtime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		expect(harness.faux.contexts).toHaveLength(1);
+		expect(JSON.stringify(harness.faux.contexts[0])).toContain("read aloud by a screen reader");
 		harness.cleanup();
 	});
 
@@ -181,6 +240,7 @@ function makeStubRuntime(sessionOverrides: Record<string, unknown>): {
 		sessionId: "sess-1",
 		isStreaming: false,
 		agent: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+		waitForIdle: vi.fn().mockResolvedValue(undefined),
 		bindExtensions: vi.fn().mockResolvedValue(undefined),
 		subscribe: vi.fn(() => () => {}),
 		navigateTree: vi.fn().mockResolvedValue({ cancelled: false }),
@@ -278,7 +338,7 @@ describe("runAccessibleMode Ctrl+C", () => {
 		// await and crash the process instead of exiting.
 		const { runtime } = makeStubRuntime({
 			isStreaming: false,
-			modelRegistry: { getAvailable: vi.fn().mockResolvedValue([{ provider: "faux", id: "faux-1" }]) },
+			modelRuntime: { getAvailable: vi.fn().mockResolvedValue([{ provider: "faux", id: "faux-1" }]) },
 		});
 		const rec = createRecordingWriter();
 		// The main prompt resolves to /model; the command's model-selection prompt then pends.
@@ -300,5 +360,152 @@ describe("runAccessibleMode Ctrl+C", () => {
 		const code = await promise;
 		expect(code).toBe(130);
 		expect(rec.errors).toHaveLength(0); // not surfaced as an error; treated as clean shutdown
+	});
+});
+
+describe("runAccessibleMode request errors and startup warnings", () => {
+	it("prints a request error that only arrives as stopReason error, once", async () => {
+		// Regression: a provider failure (e.g. 401) reaches the session only as an assistant
+		// message with stopReason "error"; the REPL printed nothing but the turn summary.
+		const harness = await createHarness({
+			responses: [{ error: "OpenAI API error (401): Incorrect API key provided" }],
+			settings: { retry: { enabled: false } },
+		});
+		const runtime = {
+			session: harness.session,
+			cwd: harness.tempDir,
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setRebindSession: vi.fn(),
+		} as unknown as AgentSessionRuntime;
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(["hello", "/quit"]);
+
+		await runAccessibleMode(
+			runtime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		expect(rec.errors).toEqual(["Error: OpenAI API error (401): Incorrect API key provided."]);
+		expect(rec.lines.some((line) => line.startsWith("Turn: "))).toBe(true);
+		harness.cleanup();
+	});
+
+	it("warns after the banner when the session's model could not be restored", async () => {
+		const { runtime } = makeStubRuntime({});
+		Object.defineProperty(runtime, "modelFallbackMessage", {
+			value: "Could not restore model gone/model-x. Using faux/faux-1",
+		});
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(["/quit"]);
+
+		await runAccessibleMode(
+			runtime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		expect(rec.lines.slice(0, 4)).toEqual([
+			"Pi by Jeroen Esseveld.",
+			"Model: faux-1.",
+			"Warning: Could not restore model gone/model-x. Using faux/faux-1.",
+			"Type something or type /help.",
+		]);
+	});
+});
+
+describe("runAccessibleMode plan mode", () => {
+	async function runWithNewSession(lines: string[]) {
+		const first = await createHarness();
+		const second = await createHarness();
+		const runtime = {
+			session: first.session,
+			cwd: first.tempDir,
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setRebindSession: vi.fn(),
+			newSession: vi.fn(async () => {
+				runtime.session = second.session;
+				return { cancelled: false };
+			}),
+		};
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(lines);
+		await runAccessibleMode(
+			runtime as unknown as AgentSessionRuntime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+		return { first, second, rec };
+	}
+
+	it("keeps plan mode across /new and restricts the new session's tools too", async () => {
+		const { first, second } = await runWithNewSession(["/plan", "/new", "/quit"]);
+		const tools = second.session.getActiveToolNames();
+		expect(tools).toContain("read");
+		for (const name of ["bash", "edit", "write"]) {
+			expect(tools).not.toContain(name);
+		}
+		first.cleanup();
+		second.cleanup();
+	});
+
+	it("/build after /new restores the new session's own full tool set", async () => {
+		const { first, second } = await runWithNewSession(["/plan", "/new", "/build", "/quit"]);
+		expect(second.session.getActiveToolNames()).toEqual(expect.arrayContaining(["read", "bash", "edit", "write"]));
+		first.cleanup();
+		second.cleanup();
+	});
+
+	it("dispatches extension commands with their raw args, without the plan directive", async () => {
+		const calls: string[] = [];
+		const harness = await createHarnessWithExtensions({
+			responses: ["should never be requested"],
+			extensionFactories: [
+				(pi) => {
+					pi.registerCommand("ext", {
+						description: "Test command",
+						handler: async (args) => {
+							calls.push(args);
+						},
+					});
+				},
+			],
+		});
+		const runtime = {
+			session: harness.session,
+			cwd: harness.tempDir,
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setRebindSession: vi.fn(),
+		} as unknown as AgentSessionRuntime;
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(["/plan", "/ext login github", "/ext", "/quit"]);
+
+		await runAccessibleMode(
+			runtime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		expect(calls).toEqual(["login github", ""]);
+		expect(harness.faux.callCount).toBe(0);
+		expect(rec.lines).not.toContain("Planning.");
+		harness.cleanup();
+	});
+
+	it("the session tool-call guard blocks an active tool before it runs", async () => {
+		const harness = await createHarness({
+			responses: [{ toolCalls: [{ name: "bash", args: { command: "echo hi > guarded.txt" } }] }, "done"],
+		});
+		harness.session.setToolCallGuard((name) =>
+			name === "bash" ? "Plan mode is active: bash is disabled." : undefined,
+		);
+		await harness.session.prompt("go");
+
+		const ends = harness.eventsOfType("tool_execution_end");
+		expect(ends).toHaveLength(1);
+		expect(ends[0].isError).toBe(true);
+		expect(JSON.stringify(ends[0].result)).toContain("Plan mode is active: bash is disabled.");
+		expect(existsSync(join(harness.tempDir, "guarded.txt"))).toBe(false);
+		harness.cleanup();
 	});
 });

@@ -6,7 +6,7 @@
  * agent as a prompt; anything else prints a hint.
  */
 
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { type SessionInfo, SessionManager } from "../../core/session-manager.ts";
 import { runLogin, runLogout } from "./login.ts";
 import { modelLabel } from "./model-label.ts";
@@ -20,8 +20,8 @@ const COMMAND_HELP: Record<string, string> = {
 	model: "/model [pattern]. Show or switch the active model. Without a pattern, lists all available models and prompts for a selection.",
 	effort:
 		"/effort [level]. Show or set the thinking level (off, minimal, low, medium, high, xhigh). Without a level, lists the levels the current model supports and prompts for a selection.",
-	plan: "/plan. Enter plan mode: disable edit, write, and bash (read-only tools only) and ask the model to produce a numbered plan without making changes.",
-	build: "/build. Leave plan mode and restore full tool access (edit, write, bash).",
+	plan: "/plan. Enter plan mode: keep only read-only tools (edit, write, bash, and any other tool that can make changes are disabled) and ask the model to produce a numbered plan without making changes.",
+	build: "/build. Leave plan mode and restore full tool access.",
 	compact: "/compact [notes]. Summarize and shrink the conversation context. Optional notes guide the summary.",
 	session: "/session. Show session info and stats including model, token counts, and message totals.",
 	usage: "/usage. Show the remaining GitHub Copilot premium request quota for your subscription.",
@@ -172,7 +172,7 @@ async function handleNew(ctx: CommandContext): Promise<void> {
 }
 
 async function handleModel(ctx: CommandContext, pattern: string): Promise<void> {
-	const models = await ctx.session.modelRegistry.getAvailable();
+	const models = await ctx.session.modelRuntime.getAvailable(undefined, { signal: AbortSignal.timeout(15_000) });
 	const current = ctx.session.model;
 
 	if (models.length === 0) {
@@ -190,14 +190,14 @@ async function handleModel(ctx: CommandContext, pattern: string): Promise<void> 
 			ctx.writer.line(`No model matching "${pattern}". Current model: ${modelLabel(current)}.`);
 			return;
 		}
-		await ctx.session.setModel(match);
+		await ctx.session.setModel(match, { persist: true });
 		ctx.writer.line(`Model set to ${match.provider}/${match.id}.`);
 		return;
 	}
 
 	// Group by provider so the list reads as "provider: model" instead of repeating the
 	// provider prefix on every line. Numbering runs across the whole (grouped) list.
-	const byProvider = new Map<string, Model<any>[]>();
+	const byProvider = new Map<string, Model<Api>[]>();
 	const providerOrder: string[] = [];
 	for (const model of models) {
 		let list = byProvider.get(model.provider);
@@ -212,7 +212,7 @@ async function handleModel(ctx: CommandContext, pattern: string): Promise<void> 
 
 	ctx.writer.line(`Current model: ${modelLabel(current)}.`);
 	ctx.writer.line("Available models:");
-	const ordered: Model<any>[] = [];
+	const ordered: Model<Api>[] = [];
 	for (const provider of providerOrder) {
 		ctx.writer.line(`${provider}:`);
 		const providerModels = (byProvider.get(provider) ?? []).slice().sort((a, b) => a.id.localeCompare(b.id));
@@ -229,7 +229,7 @@ async function handleModel(ctx: CommandContext, pattern: string): Promise<void> 
 		return;
 	}
 	const selected = ordered[choice - 1];
-	await ctx.session.setModel(selected);
+	await ctx.session.setModel(selected, { persist: true });
 	ctx.writer.line(`Model set to ${selected.provider}/${selected.id}.`);
 }
 
@@ -253,7 +253,7 @@ async function handleEffort(ctx: CommandContext, arg: string): Promise<void> {
 			);
 			return;
 		}
-		ctx.session.setThinkingLevel(match);
+		ctx.session.setThinkingLevel(match, { persist: true });
 		// Report the resulting level (setThinkingLevel clamps to the model's range).
 		ctx.writer.line(`Thinking level set to ${ctx.session.thinkingLevel}.`);
 		return;
@@ -273,7 +273,7 @@ async function handleEffort(ctx: CommandContext, arg: string): Promise<void> {
 		return;
 	}
 	const selected = levels[choice - 1];
-	ctx.session.setThinkingLevel(selected);
+	ctx.session.setThinkingLevel(selected, { persist: true });
 	ctx.writer.line(`Thinking level set to ${ctx.session.thinkingLevel}.`);
 }
 
@@ -283,7 +283,9 @@ function handlePlan(ctx: CommandContext): void {
 		return;
 	}
 	const tools = ctx.planMode.enter(ctx.session);
-	ctx.writer.line("Plan mode on. Edit, write, and bash are disabled.");
+	ctx.writer.line(
+		"Plan mode on. Only read-only tools are available; edit, write, bash, and other tools that can make changes are disabled.",
+	);
 	ctx.writer.line(`Active tools: ${tools.join(", ")}.`);
 	ctx.writer.line("Investigate, then reply with a numbered plan. Use /build to restore full access.");
 }
@@ -294,7 +296,7 @@ function handleBuild(ctx: CommandContext): void {
 		return;
 	}
 	ctx.planMode.exit(ctx.session);
-	ctx.writer.line("Build mode on. Full tool access restored (edit, write, bash).");
+	ctx.writer.line("Build mode on. Full tool access restored.");
 }
 
 /**
@@ -338,12 +340,21 @@ function handleStream(ctx: CommandContext, arg: string): void {
 }
 
 async function handleCompact(ctx: CommandContext, instructions: string): Promise<void> {
-	// The subscribed renderer prints [compacting context…] / [context compacted]
-	// from the compaction_start / compaction_end events this triggers.
+	// The subscribed renderer prints [compacting context…] / [context compacted] / the
+	// error from the compaction_start / compaction_end events this triggers. Only a
+	// failure that never reached compaction_end is reported here, so it is said once.
+	let ended = false;
+	const unsubscribe = ctx.session.subscribe((event) => {
+		if (event.type === "compaction_end") ended = true;
+	});
 	try {
 		await ctx.session.compact(instructions || undefined);
 	} catch (error: unknown) {
-		ctx.writer.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+		if (!ended) {
+			ctx.writer.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	} finally {
+		unsubscribe();
 	}
 }
 

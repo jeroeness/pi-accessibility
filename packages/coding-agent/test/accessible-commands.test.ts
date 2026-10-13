@@ -1,4 +1,8 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ENV_AGENT_DIR } from "../src/config.ts";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
 import { type SessionInfo, SessionManager } from "../src/core/session-manager.ts";
@@ -14,6 +18,15 @@ const MODELS = [
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
+/** Point the agent dir (and so auth.json) at an empty temp dir, so /usage sees no stored credential. */
+function useEmptyAgentDir(): void {
+	vi.stubEnv(ENV_AGENT_DIR, mkdtempSync(join(tmpdir(), "pi-accessible-commands-")));
+}
+
+afterEach(() => {
+	vi.unstubAllEnvs();
+});
+
 function makeCtx(
 	overrides: {
 		prompterInputs?: string[];
@@ -28,12 +41,33 @@ function makeCtx(
 		supportsThinking?: boolean;
 		thinkingLevels?: string[];
 		activeTools?: string[];
+		toolDefinitions?: Record<string, { annotations?: { readOnlyHint?: boolean }; reachesTools?: unknown }>;
+		compactError?: { message: string; emitCompactionEnd: boolean };
 	} = {},
 ) {
 	const rec = createRecordingWriter();
 	const fake = createFakePrompter(overrides.prompterInputs ?? []);
 	const setModel = vi.fn().mockResolvedValue(undefined);
-	const compact = vi.fn().mockResolvedValue({});
+	// Session event listeners, so commands that subscribe (e.g. /compact) see emitted events.
+	const listeners = new Set<(event: { type: string }) => void>();
+	const subscribe = vi.fn((listener: (event: { type: string }) => void) => {
+		listeners.add(listener);
+		return () => listeners.delete(listener);
+	});
+	const compact = vi.fn(async () => {
+		const failure = overrides.compactError;
+		if (!failure) return {};
+		// Like the real session: a failed manual compaction emits compaction_end with the
+		// error before rejecting (unless it failed before compaction started).
+		if (failure.emitCompactionEnd) {
+			for (const listener of listeners) listener({ type: "compaction_end" });
+		}
+		throw new Error(failure.message);
+	});
+	let toolCallGuard: ((toolName: string) => string | undefined) | undefined;
+	const setToolCallGuard = vi.fn((guard: ((toolName: string) => string | undefined) | undefined) => {
+		toolCallGuard = guard;
+	});
 	let thinkingLevel = overrides.thinkingLevel ?? "medium";
 	// Mirrors the real session: setThinkingLevel updates the current level in place.
 	const setThinkingLevel = vi.fn((level: string) => {
@@ -57,9 +91,11 @@ function makeCtx(
 		setThinkingLevel,
 		getActiveToolNames: () => activeTools,
 		setActiveToolsByName,
-		modelRegistry: {
+		getToolDefinition: (name: string) => overrides.toolDefinitions?.[name],
+		setToolCallGuard,
+		subscribe,
+		modelRuntime: {
 			getAvailable: vi.fn().mockResolvedValue(MODELS),
-			authStorage: { get: vi.fn().mockReturnValue(undefined) },
 		},
 		setModel,
 		compact,
@@ -121,6 +157,8 @@ function makeCtx(
 		setModel,
 		setThinkingLevel,
 		setActiveToolsByName,
+		setToolCallGuard,
+		getToolCallGuard: () => toolCallGuard,
 		planMode,
 		compact,
 		newSession,
@@ -170,6 +208,7 @@ describe("dispatchCommand routing", () => {
 	});
 
 	it("/usage and its hidden /token synonym reach the same handler", async () => {
+		useEmptyAgentDir();
 		const usage = makeCtx();
 		expect(await dispatchCommand("/usage", usage.ctx)).toEqual({ kind: "handled" });
 		const token = makeCtx();
@@ -180,6 +219,7 @@ describe("dispatchCommand routing", () => {
 	});
 
 	it("ignores anything typed after /usage", async () => {
+		useEmptyAgentDir();
 		const plain = makeCtx();
 		await dispatchCommand("/usage", plain.ctx);
 		for (const line of ["/usage quota", "/usage banana", "/token quota please"]) {
@@ -223,7 +263,7 @@ describe("/model", () => {
 		expect(rec.lines).toContain("  1. opus.");
 		expect(rec.lines).toContain("openai:");
 		expect(rec.lines).toContain("  2. gpt.");
-		expect(setModel).toHaveBeenCalledWith(MODELS[1]);
+		expect(setModel).toHaveBeenCalledWith(MODELS[1], { persist: true });
 	});
 
 	it("keeps current model when selection is blank", async () => {
@@ -235,7 +275,7 @@ describe("/model", () => {
 	it("switches by pattern argument", async () => {
 		const { ctx, setModel } = makeCtx();
 		await dispatchCommand("/model gpt", ctx);
-		expect(setModel).toHaveBeenCalledWith(MODELS[1]);
+		expect(setModel).toHaveBeenCalledWith(MODELS[1], { persist: true });
 	});
 
 	it("reports when a pattern does not match", async () => {
@@ -253,7 +293,7 @@ describe("/effort", () => {
 		expect(rec.lines).toContain("Current thinking level: medium.");
 		expect(rec.lines).toContain("Available levels:");
 		expect(rec.lines).toContain("  5. high.");
-		expect(setThinkingLevel).toHaveBeenCalledWith("high");
+		expect(setThinkingLevel).toHaveBeenCalledWith("high", { persist: true });
 		expect(rec.lines).toContain("Thinking level set to high.");
 	});
 
@@ -267,7 +307,7 @@ describe("/effort", () => {
 	it("sets the level directly from an argument", async () => {
 		const { ctx, rec, setThinkingLevel } = makeCtx();
 		await dispatchCommand("/effort xhigh", ctx);
-		expect(setThinkingLevel).toHaveBeenCalledWith("xhigh");
+		expect(setThinkingLevel).toHaveBeenCalledWith("xhigh", { persist: true });
 		expect(rec.lines).toContain("Thinking level set to xhigh.");
 	});
 
@@ -292,8 +332,104 @@ describe("/plan and /build", () => {
 		expect(await dispatchCommand("/plan", ctx)).toEqual({ kind: "handled" });
 		expect(setActiveToolsByName).toHaveBeenCalledWith(["read", "grep", "find", "ls"]);
 		expect(planMode.isActive()).toBe(true);
-		expect(rec.lines).toContain("Plan mode on. Edit, write, and bash are disabled.");
+		expect(rec.lines).toContain(
+			"Plan mode on. Only read-only tools are available; edit, write, bash, and other tools that can make changes are disabled.",
+		);
 		expect(rec.lines).toContain("Active tools: read, grep, find, ls.");
+	});
+
+	it("/plan also removes the Windows powershell tool", async () => {
+		const { ctx, setActiveToolsByName } = makeCtx({ activeTools: ["read", "powershell", "edit", "write"] });
+		await dispatchCommand("/plan", ctx);
+		expect(setActiveToolsByName).toHaveBeenCalledWith(["read", "grep", "find", "ls"]);
+	});
+
+	it("/plan keeps only allowlisted read-only tools: codemode, tool_search, subagent, and mutating MCP tools are dropped", async () => {
+		const { ctx, setActiveToolsByName } = makeCtx({
+			activeTools: [
+				"read",
+				"bash",
+				"codemode",
+				"tool_search",
+				"subagent",
+				"mcp__github__create_pull_request",
+				"mcp__github__list_issues",
+				"web_search",
+			],
+			toolDefinitions: {
+				// Reaches other tools: never allowed, even if it claims to be read-only.
+				codemode: { annotations: { readOnlyHint: true }, reachesTools: () => "all" },
+				tool_search: { reachesTools: () => "all" },
+				subagent: {},
+				mcp__github__create_pull_request: { annotations: { readOnlyHint: false } },
+				mcp__github__list_issues: { annotations: { readOnlyHint: true } },
+				web_search: { annotations: { readOnlyHint: true } },
+			},
+		});
+		await dispatchCommand("/plan", ctx);
+		expect(setActiveToolsByName).toHaveBeenCalledWith([
+			"read",
+			"mcp__github__list_issues",
+			"web_search",
+			"grep",
+			"find",
+			"ls",
+		]);
+	});
+
+	it("/plan installs a tool-call guard that blocks non-read-only tools, and /build removes it", async () => {
+		const { ctx, getToolCallGuard } = makeCtx({
+			toolDefinitions: { mcp__docs__search: { annotations: { readOnlyHint: true } } },
+		});
+		await dispatchCommand("/plan", ctx);
+		const guard = getToolCallGuard();
+		expect(guard).toBeDefined();
+		// Blocked even when not active (a codemode script calls tools through ctx.executeTool()).
+		expect(guard?.("bash")).toContain("Plan mode is active");
+		expect(guard?.("codemode")).toContain("codemode is disabled");
+		expect(guard?.("mcp__github__create_pull_request")).toBeDefined();
+		expect(guard?.("read")).toBeUndefined();
+		expect(guard?.("mcp__docs__search")).toBeUndefined();
+		await dispatchCommand("/build", ctx);
+		expect(getToolCallGuard()).toBeUndefined();
+	});
+
+	it("plan mode drops tools activated after /plan and restores them on /build", async () => {
+		const { ctx, session, setActiveToolsByName, planMode } = makeCtx();
+		await dispatchCommand("/plan", ctx);
+		// An MCP server connects and activates codemode while plan mode is on.
+		session.setActiveToolsByName([...session.getActiveToolNames(), "codemode"]);
+		planMode.enforce(session);
+		expect(session.getActiveToolNames()).not.toContain("codemode");
+		setActiveToolsByName.mockClear();
+		await dispatchCommand("/build", ctx);
+		expect(setActiveToolsByName).toHaveBeenCalledWith(["read", "bash", "edit", "write", "codemode"]);
+	});
+
+	it("plan mode is re-applied to a new session, which /build then restores", async () => {
+		const { ctx, planMode } = makeCtx();
+		await dispatchCommand("/plan", ctx);
+		// /new or /resume: a fresh session starts with its own full tool set.
+		let tools = ["read", "bash", "edit", "write"];
+		let guard: ((name: string) => string | undefined) | undefined;
+		const next = {
+			getActiveToolNames: () => tools,
+			setActiveToolsByName: (names: string[]) => {
+				tools = names;
+			},
+			getToolDefinition: () => undefined,
+			setToolCallGuard: (value: typeof guard) => {
+				guard = value;
+			},
+		} as unknown as AgentSession;
+		planMode.reapply(next);
+		expect(tools).toEqual(["read", "grep", "find", "ls"]);
+		expect(guard?.("bash")).toBeDefined();
+		// A second rebind of the same session must not capture the restricted set.
+		planMode.reapply(next);
+		planMode.exit(next);
+		expect(tools).toEqual(["read", "bash", "edit", "write"]);
+		expect(guard).toBeUndefined();
 	});
 
 	it("/build restores the full tool set and leaves plan mode", async () => {
@@ -340,6 +476,21 @@ describe("/compact and /session and /new", () => {
 		const { ctx, compact } = makeCtx();
 		await dispatchCommand("/compact keep the API notes", ctx);
 		expect(compact).toHaveBeenCalledWith("keep the API notes");
+	});
+
+	it("/compact reports a failure once when compaction_end already announced it", async () => {
+		const { ctx, rec } = makeCtx({
+			compactError: { message: "Nothing to compact (session too small)", emitCompactionEnd: true },
+		});
+		await dispatchCommand("/compact", ctx);
+		// The renderer prints the compaction_end error; the command adds nothing.
+		expect(rec.errors).toEqual([]);
+	});
+
+	it("/compact reports a failure that happened before compaction started", async () => {
+		const { ctx, rec } = makeCtx({ compactError: { message: "No model selected", emitCompactionEnd: false } });
+		await dispatchCommand("/compact", ctx);
+		expect(rec.errors).toEqual(["Error: No model selected"]);
 	});
 
 	it("/session prints labeled stats", async () => {

@@ -55,6 +55,12 @@ export interface LineWriter {
 	clear(): void;
 }
 
+/** Options for {@link Prompter.question}. */
+export interface QuestionOptions {
+	/** Do not echo the typed answer (API keys and other secrets). */
+	secret?: boolean;
+}
+
 /**
  * Minimal readline seam so the loop and the text UI prompts can be exercised in
  * tests without a real TTY.
@@ -64,9 +70,9 @@ export interface Prompter {
 	 * Print a prompt and resolve with the user's line (without the trailing newline).
 	 * Rejects when input ends (EOF / close) so callers can break their loop. When a
 	 * `signal` is supplied and aborts, the pending question is cancelled and the
-	 * promise rejects.
+	 * promise rejects. With `options.secret`, the typed answer is not echoed.
 	 */
-	question(query: string, signal?: AbortSignal): Promise<string>;
+	question(query: string, signal?: AbortSignal, options?: QuestionOptions): Promise<string>;
 	/**
 	 * Mark whether a model turn is in progress. While a turn is active and no
 	 * {@link Prompter.question} is pending, keystrokes are "out of turn": the

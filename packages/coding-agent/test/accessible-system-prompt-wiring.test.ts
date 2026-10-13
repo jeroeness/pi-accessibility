@@ -13,7 +13,7 @@ const RULES_MARKER = "<screen_reader_output>";
 
 describe("accessible mode system-prompt wiring", () => {
 	it("injects the screen-reader output rules when the session is bound to accessible mode", async () => {
-		const harness = createHarness();
+		const harness = await createHarness();
 
 		// Built at construction with the default (non-accessible) mode.
 		expect(harness.session.systemPrompt).not.toContain(RULES_MARKER);
@@ -27,7 +27,7 @@ describe("accessible mode system-prompt wiring", () => {
 	});
 
 	it("does not inject the rules for a non-accessible mode", async () => {
-		const harness = createHarness();
+		const harness = await createHarness();
 
 		await harness.session.bindExtensions({ mode: "tui" });
 

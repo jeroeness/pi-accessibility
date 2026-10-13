@@ -13,15 +13,19 @@ the right tag, push it, and verify the result.
 
 ## Release tag scheme
 
-- This fork tags releases as `v<pkg-version>-vi.<N>` (e.g. `v0.80.3-vi.3`), where
+- This fork tags releases as `v<pkg-version>-vi.<N>` (e.g. `v1.2.0-vi.1`), where
   `<pkg-version>` is the version in `packages/ai/package.json` and `<N>` is a
   monotonically increasing fork release counter.
 - The package versions (`packages/*/package.json`) are **not** bumped for a
   `-vi.N` release — only a new tag is created. Each `-vi.N` release just points
   at a newer commit on `main`.
+- `scripts/create-source-archive.sh` accepts `--version <pkg-version>` or
+  `<pkg-version>-vi.<N>`, so the workflow builds `pi-<pkg-version>-vi.<N>-source.tar.gz`
+  from a fork tag. Dry run before tagging (after `npm run hydrate:model-data`):
+  `./scripts/create-source-archive.sh --version 1.2.0-vi.1 --ref HEAD --out /tmp/pi-src.tgz`.
 - Release notes come from `scripts/release-notes.mjs extract`, which looks for a
   `## [<version>]` heading in `packages/coding-agent/CHANGELOG.md`. Since
-  `0.80.3-vi.N` has no such heading, the notes fall back to `Release <version>`.
+  `1.2.0-vi.N` has no such heading, the notes fall back to `Release <version>`.
   That is expected for `-vi.N` releases.
 
 ## Steps
@@ -35,7 +39,7 @@ grep '"version"' packages/*/package.json         # current package version
 ```
 
 Determine the next tag: same package version, `N` incremented by one
-(e.g. latest `v0.80.3-vi.2` → next `v0.80.3-vi.3`). If the package version has
+(e.g. latest `v1.2.0-vi.1` → next `v1.2.0-vi.2`). If the package version has
 moved on since the last `-vi` tag, reset `N` to `1` under the new version.
 
 ### 2. Verify a clean, in-sync tree
@@ -56,8 +60,8 @@ Tag `HEAD` (the commit you want released) with an annotated tag, then push it.
 The push is what triggers CI.
 
 ```bash
-git tag -a v0.80.3-vi.3 -m "Release v0.80.3-vi.3" HEAD
-git push origin v0.80.3-vi.3
+git tag -a v1.2.0-vi.1 -m "Release v1.2.0-vi.1" HEAD
+git push origin v1.2.0-vi.1
 ```
 
 Note: `origin` may redirect (the repo has been renamed). The push still
@@ -71,14 +75,14 @@ gh run list --workflow=build-binaries.yml --limit 3     # confirm the run starte
 gh run watch <run-id> --exit-status --interval 20       # wait for success
 ```
 
-The run has four jobs: `build` → `stage-github-release` → `publish-github-release`,
+The run has five jobs: `build` → `smoke-test-binaries` → `stage-github-release` → `publish-github-release`,
 with `cleanup-draft-github-release` skipped on success (it only fires to delete
 the draft if staging or publishing fails). A run takes roughly 2–3 minutes.
 
 ### 5. Verify the published release
 
 ```bash
-gh release view v0.80.3-vi.3 \
+gh release view v1.2.0-vi.1 \
   --json name,tagName,isDraft,isPrerelease,url,assets \
   --jq '{name, tagName, isDraft, isPrerelease, url, assets: [.assets[].name]}'
 ```
@@ -94,7 +98,7 @@ Confirm `isDraft: false` and that all nine assets are present:
 ## Recovery
 
 - **Build failed after the tag was pushed:** fix the cause, then re-run the same
-  tag build via `gh workflow run build-binaries.yml -f tag=v0.80.3-vi.3`
+  tag build via `gh workflow run build-binaries.yml -f tag=v1.2.0-vi.1`
   (`workflow_dispatch` supports an optional `source_ref` for release recovery).
   The staging job deletes and recreates the draft on re-run, but refuses to touch
   an already-**published** release.

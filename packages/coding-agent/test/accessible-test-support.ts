@@ -4,7 +4,7 @@
  */
 
 import { InputClosedError, QuestionAbortedError } from "../src/modes/accessible/prompter.ts";
-import type { LineWriter, Prompter } from "../src/modes/accessible/types.ts";
+import type { LineWriter, Prompter, QuestionOptions } from "../src/modes/accessible/types.ts";
 
 export interface RecordingWriter {
 	writer: LineWriter;
@@ -43,6 +43,10 @@ export interface FakePrompter {
 	prompter: Prompter;
 	/** Prompt strings asked, in order. */
 	prompts: string[];
+	/** The abort signal passed with each question, in order (undefined when none). */
+	signals: Array<AbortSignal | undefined>;
+	/** The options passed with each question, in order (undefined when none). */
+	options: Array<QuestionOptions | undefined>;
 	/** Every `setTurnActive` value in call order (true when a turn begins, false when it ends). */
 	turnActiveCalls: boolean[];
 	/** Trigger the registered SIGINT handler. */
@@ -61,6 +65,8 @@ export interface FakePrompter {
 export function createFakePrompter(queued: string[] = []): FakePrompter {
 	const inputs = [...queued];
 	const prompts: string[] = [];
+	const signals: Array<AbortSignal | undefined> = [];
+	const options: Array<QuestionOptions | undefined> = [];
 	const turnActiveCalls: boolean[] = [];
 	const closeHandlers: Array<() => void> = [];
 	let sigintHandler: (() => void) | undefined;
@@ -68,8 +74,10 @@ export function createFakePrompter(queued: string[] = []): FakePrompter {
 	let closed = false;
 
 	const prompter: Prompter = {
-		question(query: string, signal?: AbortSignal): Promise<string> {
+		question(query: string, signal?: AbortSignal, questionOptions?: QuestionOptions): Promise<string> {
 			prompts.push(query);
+			signals.push(signal);
+			options.push(questionOptions);
 			if (closed) {
 				return Promise.reject(new InputClosedError());
 			}
@@ -117,6 +125,8 @@ export function createFakePrompter(queued: string[] = []): FakePrompter {
 	return {
 		prompter,
 		prompts,
+		signals,
+		options,
 		turnActiveCalls,
 		fireSigint: () => sigintHandler?.(),
 		resolveNext: (text: string) => {

@@ -454,3 +454,78 @@ describe("session events", () => {
 		]);
 	});
 });
+
+describe("powershell and nested tool calls", () => {
+	it("summarises powershell calls like bash, grouped by command word", () => {
+		const events = [
+			toolStart("p1", "powershell", { command: "Set-Location src; Get-ChildItem -Recurse" }),
+			toolEnd("p1", "powershell", textResult("a.ts")),
+			toolStart("p2", "powershell", { command: "Get-ChildItem" }),
+			toolEnd("p2", "powershell", textResult("b.ts")),
+			toolStart("b1", "bash", { command: "ls" }),
+			toolEnd("b1", "bash", textResult("x")),
+		];
+		expect(render(events)).toEqual(["powershell Get-ChildItem (2) ok.", "bash ls ok."]);
+	});
+
+	it("does not announce calls another tool made through ctx.executeTool()", () => {
+		const nested = (event: AgentSessionEvent) => ({ ...event, parentToolCallId: "c1" }) as AgentSessionEvent;
+		const events = [
+			toolStart("c1", "codemode", { code: "await tools.read({ path: 'a.ts' })" }),
+			nested(toolStart("n1", "read", { path: "a.ts" })),
+			nested(toolEnd("n1", "read", textResult("content"))),
+			toolEnd("c1", "codemode", textResult("done")),
+		];
+		expect(render(events)).toEqual(["» codemode: done."]);
+	});
+});
+
+describe("request errors", () => {
+	function failedMessageEnd(errorMessage: string): AgentSessionEvent {
+		return {
+			type: "message_end",
+			message: { role: "assistant", content: [], stopReason: "error", errorMessage },
+		} as unknown as AgentSessionEvent;
+	}
+	function agentEnd(willRetry: boolean): AgentSessionEvent {
+		return { type: "agent_end", messages: [], willRetry } as unknown as AgentSessionEvent;
+	}
+
+	it("prints an error that ends the run once, with closing punctuation", () => {
+		const rec = createRecordingWriter();
+		const renderer = createEventRenderer(rec.writer);
+		renderer.handle(failedMessageEnd("OpenAI API error (401): Incorrect API key"));
+		renderer.handle(agentEnd(false));
+		renderer.endTurn();
+		expect(rec.errors).toEqual(["Error: OpenAI API error (401): Incorrect API key."]);
+	});
+
+	it("leaves a retried failure to the retry line", () => {
+		const rec = createRecordingWriter();
+		const renderer = createEventRenderer(rec.writer);
+		renderer.handle(failedMessageEnd("overloaded"));
+		renderer.handle(agentEnd(true));
+		renderer.handle({
+			type: "auto_retry_start",
+			attempt: 1,
+			maxAttempts: 3,
+			delayMs: 1000,
+			errorMessage: "overloaded",
+		} as AgentSessionEvent);
+		renderer.endTurn();
+		expect(rec.errors).toEqual([]);
+		expect(rec.lines).toEqual(["[retrying (attempt 1/3) after error: overloaded]"]);
+	});
+
+	it("prints nothing for an aborted request", () => {
+		const rec = createRecordingWriter();
+		const renderer = createEventRenderer(rec.writer);
+		renderer.handle({
+			type: "message_end",
+			message: { role: "assistant", content: [], stopReason: "aborted", errorMessage: "Request was aborted" },
+		} as unknown as AgentSessionEvent);
+		renderer.handle(agentEnd(false));
+		renderer.endTurn();
+		expect(rec.errors).toEqual([]);
+	});
+});

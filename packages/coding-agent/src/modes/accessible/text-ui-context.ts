@@ -17,36 +17,29 @@ import type { LineWriter, Prompter } from "./types.ts";
 
 /**
  * Ask a question via the prompter, resolving to `undefined` if the dialog's abort
- * signal fires or its timeout elapses first.
+ * signal fires or its timeout elapses first. The cancellation is passed into the
+ * question itself, so readline drops it: a question left pending would swallow the
+ * user's next line and hang the REPL prompt that follows.
  */
-function ask(
+async function ask(
 	prompter: Prompter,
 	query: string,
 	opts: ExtensionUIDialogOptions | undefined,
 ): Promise<string | undefined> {
-	const questionPromise = prompter.question(query).then(
-		(value) => ({ value }) as { value: string | undefined },
-		() => ({ value: undefined }),
-	);
-	if (!opts?.signal && !opts?.timeout) {
-		return questionPromise.then((r) => r.value);
+	if (opts?.signal?.aborted) return undefined;
+	const controller = new AbortController();
+	const cancel = (): void => controller.abort();
+	opts?.signal?.addEventListener("abort", cancel, { once: true });
+	const timer = opts?.timeout ? setTimeout(cancel, opts.timeout) : undefined;
+	try {
+		return await prompter.question(query, controller.signal);
+	} catch {
+		// Aborted, timed out, or input closed.
+		return undefined;
+	} finally {
+		if (timer) clearTimeout(timer);
+		opts?.signal?.removeEventListener("abort", cancel);
 	}
-	const racers: Array<Promise<{ value: string | undefined }>> = [questionPromise];
-	if (opts?.signal) {
-		racers.push(
-			new Promise((resolve) => {
-				if (opts.signal?.aborted) {
-					resolve({ value: undefined });
-					return;
-				}
-				opts.signal?.addEventListener("abort", () => resolve({ value: undefined }), { once: true });
-			}),
-		);
-	}
-	if (opts?.timeout) {
-		racers.push(new Promise((resolve) => setTimeout(() => resolve({ value: undefined }), opts.timeout)));
-	}
-	return Promise.race(racers).then((r) => r.value);
 }
 
 export function createTextUIContext(prompter: Prompter, writer: LineWriter): ExtensionUIContext {

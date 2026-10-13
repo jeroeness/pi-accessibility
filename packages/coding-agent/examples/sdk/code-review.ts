@@ -5,19 +5,12 @@
  * Agent 3: performance and best practices
  */
 
-import {
-	AuthStorage,
-	createAgentSession,
-	ModelRegistry,
-	SessionManager,
-	SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import { createAgentSession, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 
 const cwd = process.cwd();
 
-const authStorage = AuthStorage.create();
-const modelRegistry = ModelRegistry.create(authStorage);
-const available = await modelRegistry.getAvailable();
+const modelRuntime = await ModelRuntime.create();
+const available = await modelRuntime.getAvailable();
 
 // Prefer github-copilot sonnet, fall back to first available
 const model = available.find((m) => m.provider === "github-copilot" && m.id === "claude-sonnet-4.5") ?? available[0];
@@ -29,8 +22,7 @@ async function runReviewAgent(name: string, focus: string): Promise<string> {
 	const { session } = await createAgentSession({
 		cwd,
 		model,
-		authStorage,
-		modelRegistry,
+		modelRuntime,
 		tools: ["read", "bash", "grep", "find", "ls"],
 		sessionManager: SessionManager.inMemory(cwd),
 		settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
@@ -76,12 +68,12 @@ console.log("AGENT 1: Code Quality & Architecture");
 console.log("=".repeat(60));
 console.log(quality);
 
-console.log("\n" + "=".repeat(60));
+console.log(`\n${"=".repeat(60)}`);
 console.log("AGENT 2: Security & Correctness");
 console.log("=".repeat(60));
 console.log(security);
 
-console.log("\n" + "=".repeat(60));
+console.log(`\n${"=".repeat(60)}`);
 console.log("AGENT 3: Performance & Best Practices");
 console.log("=".repeat(60));
 console.log(performance);

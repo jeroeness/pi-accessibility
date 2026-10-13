@@ -8,21 +8,35 @@ prompt returns. It behaves like a normal interactive shell (`python`, `node`, `p
 
 ## Starting it
 
+Accessible mode is the default whenever pi runs in an interactive terminal:
+
 ```bash
-pi --accessible
+pi
 ```
 
-It also turns on automatically when the environment implies a non-visual terminal:
+The full-screen TUI is opt-in:
 
 ```bash
+pi --tui               # or PI_TUI=1 pi
+```
+
+Any accessible signal beats a TUI request, so these always start the REPL:
+
+```bash
+pi --accessible        # also --repl or --no-tui
 PI_ACCESSIBLE=1 pi     # explicit opt-in via environment
 NO_TUI=1 pi            # generic "no TUI" signal
 TERM=dumb pi           # auto-detected
 ```
 
-`--repl` and `--no-tui` are accepted as aliases for `--accessible`. The explicit flag and
-`PI_ACCESSIBLE` always win. Piped or redirected output still uses one-shot
-[print mode](usage.md) (`pi -p`), so scripts are unaffected.
+Piped or redirected input or output still uses one-shot [print mode](usage.md) (`pi -p`),
+so scripts are unaffected.
+
+On startup, pi asks its setup questions as plain text too: whether to trust a project
+that ships its own extensions or settings (also for `pi install`, `pi remove`, `pi update`,
+and `pi config`, unless `PI_TUI` is set; `pi config` itself is still full-screen), and whether to continue a resumed session whose
+working directory no longer exists. The model catalog (for example GitHub Copilot's model
+list) is refreshed in the background after startup.
 
 ## How it behaves
 
@@ -33,7 +47,10 @@ TERM=dumb pi           # auto-detected
   token/TPS/cache counters from the graphical footer are not shown. Those numbers are
   reported once instead, in the end-of-turn summary described below.
 - **Text, not color.** Every state is labeled in words (`Error:`, `[interrupted]`). ANSI
-  escape codes are stripped from all output.
+  escape codes are stripped from all output. A failed request (for example a rejected API
+  key) is reported once as an `Error:` line; one that pi retries is announced as
+  `[retrying …]` instead. The line editor at the `^` prompt still uses the terminal's
+  cursor controls to draw the line you are typing (see Keys).
 - **Model reasoning is not shown** unless you ask for it. `/verbose` toggles it on and
   off (off at startup, or on from the start with `--verbose`): when on, each reasoning
   block is opened with a `Thinking.` line and then streams like any other reply text.
@@ -44,7 +61,12 @@ TERM=dumb pi           # auto-detected
   `bash <command> <ok|failed>`, grouping a run of the same command with a count
   (`bash grep (5) ok`). The reported command is the first informative word, skipping
   navigation and wrapper prefixes so `cd pkg && grep …` reads as `bash grep ok`, not
-  `bash cd ok`. Command arguments and output are not shown.
+  `bash cd ok`. Command arguments and output are not shown. The Windows `powershell` tool
+  is summarized the same way (`powershell Get-ChildItem ok`). Tool calls that another tool
+  makes on the model's behalf (for example from a codemode script) are not announced
+  separately.
+- **Skill loads are announced by name.** When the model reads a skill's `SKILL.md`, the
+  line is `Loaded <skill name>.` instead of a file read.
 - **Minimal chrome.** Responses are printed directly (no `Assistant:` header). Each turn
   opens with one word confirming the model has taken over — `Working.` normally, or
   `Planning.` while plan mode is on — so the wait is announced before any reply arrives.
@@ -64,10 +86,9 @@ TERM=dumb pi           # auto-detected
 ## Example session
 
 ```text
-Pi coding agent v0.80.3
-Model: anthropic/claude-opus-4-5   Thinking: medium
-Directory: /home/you/project
-Type your message and press Enter. Type /help for commands, /quit to exit.
+Pi by Jeroen Esseveld.
+Model: claude-opus-4-5.
+Type something or type /help.
 
 ^ add a -V alias for --version and run the arg tests
 Working.
@@ -84,7 +105,9 @@ Turn: 41 seconds. Context: 18k of 200k tokens (9 percent). Cache hits: 87 percen
 ```
 
 When no model is configured yet, the banner reads `No model selected. Use /login or /model
-to select a model.` — run `/login` to sign in.
+to select a model.` — run `/login` to sign in. When a continued session's model is no
+longer available, a `Warning: Could not restore model …` line after the banner names the
+model used instead.
 
 ## Commands
 
@@ -93,7 +116,10 @@ to select a model.` — run `/login` to sign in.
 | `/help` | List commands and basic usage. |
 | `/login` | Sign in. Choose **subscription** (OAuth) or **API key**, then a provider. |
 | `/logout` | Remove a stored credential. |
-| `/model [pattern]` | Show the current model, or switch it (numbered list, or match by pattern). |
+| `/model [pattern]` | Show the current model, or switch it (numbered list, or match by pattern). The choice is saved as the default. |
+| `/effort [level]` | Show or set the thinking level (numbered list, or a level name). The choice is saved as the default. |
+| `/plan` | Plan mode: only read-only tools stay available, and the model replies with a numbered plan (see below). |
+| `/build` | Leave plan mode and restore full tool access. |
 | `/compact [notes]` | Summarize and shrink the conversation context. |
 | `/session` | Show session info and stats. |
 | `/usage` | Show the remaining GitHub Copilot premium request quota (also accepted as `/token`). |
@@ -106,16 +132,15 @@ to select a model.` — run `/login` to sign in.
 
 ### Streaming mode: line vs block
 
-By default the agent's reply streams **line by line** as it is generated. Some screen
-readers cope better when a reply arrives all at once, so you can switch to **block** mode,
-where each assistant message is buffered and emitted as a single block when it finishes
-(tool activity lines still appear in order):
+By default each assistant reply is buffered and emitted as a single **block** when it
+finishes (tool activity lines still appear in order). You can switch to **line** mode,
+where the reply streams line by line as it is generated:
 
 ```text
-pi --accessible --block-output      # start in block mode (also PI_BLOCK_OUTPUT=1)
+pi --line-output                    # start in line mode (also PI_LINE_OUTPUT=1)
 
-^ /stream block                     # or switch at any time
-^ /stream line
+^ /stream line                      # or switch at any time
+^ /stream block
 ^ /stream                           # show the current mode
 ```
 
@@ -131,10 +156,15 @@ Recent sessions in this project:
   1. fix the login race. (2 hours ago).
   2. draft release notes. (1 day ago).
 Select a session number (Enter to cancel): 1
-Resumed session: fix the login race. (2 hours ago).
+Resuming session "fix the login race". Press Enter to replay its transcript (42 lines), or type anything else to skip.
 
-^ /resume 2                          # resume the 2nd entry directly, no prompt
+^ /resume 2                          # resume the 2nd entry directly, no list
 ```
+
+Each session's conversation is also written to a `.transcript` file next to its session
+file. On resume, pressing Enter replays that transcript so you can review the earlier
+conversation linearly; typing anything else resumes without replaying, and Ctrl+C cancels
+the resume and keeps the current session.
 
 ### Logging in
 
@@ -158,10 +188,14 @@ Logged in to Anthropic. Selected anthropic/claude-opus-4-5. Credentials saved to
 - **Subscription** runs the provider's OAuth flow: the authorization URL (or a device
   code) is printed for you to open in a browser; if the provider asks for a pasted code,
   you type it at the prompt.
-- **API key** prompts for the key and stores it. (Note: the key is echoed as you type, like
-  any REPL input.)
-- **Amazon Bedrock** uses AWS credentials rather than a single key — `/login` points you at
-  the setup docs instead of prompting for a key.
+- **API key** prompts for the key (and any other values the provider needs) and stores it.
+  The key is not echoed while you type (the prompt reads `(typing is hidden) >`), and it is
+  not kept in the input history. An empty answer cancels.
+- Providers whose credentials are only configured outside pi (for example through cloud
+  credential files) are listed too; choosing one tells you that, instead of prompting.
+
+After login, if no model was selected yet, the provider's default model is selected and
+saved as the default.
 
 Credentials are saved to `~/.pi/agent/auth.json`. `/logout` removes a stored credential
 (environment variables and `models.json` are left untouched).
@@ -169,16 +203,36 @@ Credentials are saved to `~/.pi/agent/auth.json`. `/logout` removes a stored cre
 Anything that is not a command is sent to the agent. Extension-provided slash commands
 work too.
 
+### Plan mode
+
+`/plan` keeps only read-only tools: `read`, `grep`, `find`, `ls`, and tools that declare
+themselves read-only (MCP servers mark each tool) and cannot call other tools. Everything
+else is disabled, including `bash`, `edit`, `write`, `powershell`, `codemode`,
+`tool_search`, subagent-style extension tools, and MCP tools that are not marked
+read-only. Tools that become active later (for example `codemode` when an MCP server
+connects) are dropped again before each turn, and any call to a disabled tool, including
+one made from a script, is blocked. Plan mode stays on across `/new` and `/resume`;
+`/build` restores the full tool set of the current session.
+
 ## Keys
 
 - **Enter** — send the current line.
 - **Ctrl+C** — interrupt a running turn (the agent stops; you stay in the REPL). At an idle
   prompt, press Ctrl+C twice (or type `/quit`) to exit.
 - **Ctrl+D** — exit at an empty prompt.
+- **Tab** — complete a command name, a command argument (`/effort`, `/stream`, `/verbose`,
+  `/help`, `/model`), or a file path.
+
+Line editing, history (Up/Down), and Tab completion come from Node's readline, which
+redraws the prompt line with cursor-positioning escape codes (`ESC[1G`, `ESC[0J`, and a
+column move). They only touch the line being typed and never repaint output, but they do
+appear in raw terminal logs. The only escape-free readline mode (`TERM=dumb`) has no line
+editing, history, or completion.
 
 ## Not yet supported
 
-Session tree navigation (`/fork`, `/tree`), `/export` / `/share` / `/settings`,
-image input, and autocomplete are not available in accessible mode yet — use the standard
-TUI (`pi`) for those. Interactive prompts that extensions raise (confirm / select / input)
-are rendered as plain text questions.
+Session tree navigation (`/fork`, `/tree`), `/export` / `/share` / `/settings`, and
+image input are not available in accessible mode yet — use the full-screen TUI
+(`pi --tui`) for those. The `pi -r` session picker and `pi config` are still full-screen;
+use `/resume` inside the REPL instead of `pi -r`. Interactive prompts that extensions raise (confirm / select /
+input) are rendered as plain text questions.
