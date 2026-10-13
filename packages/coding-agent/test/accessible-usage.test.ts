@@ -1,16 +1,14 @@
+import type { Credential } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../src/modes/accessible/types.ts";
-import { handleUsage } from "../src/modes/accessible/usage.ts";
+import { handleUsage, type StoredCredentialReader } from "../src/modes/accessible/usage.ts";
 import { createRecordingWriter } from "./accessible-test-support.ts";
 
-/** Build a minimal CommandContext whose auth storage returns `credential`. */
+/** Build a minimal CommandContext plus a stored-credential reader that returns `credential`. */
 function makeCtx(credential: unknown) {
 	const rec = createRecordingWriter();
-	const get = vi.fn().mockReturnValue(credential);
-	const ctx = {
-		session: { modelRegistry: { authStorage: { get } } },
-		writer: rec.writer,
-	} as unknown as CommandContext;
+	const get = vi.fn<StoredCredentialReader>().mockReturnValue(credential as Credential | undefined);
+	const ctx = { writer: rec.writer } as unknown as CommandContext;
 	return { ctx, rec, get };
 }
 
@@ -36,14 +34,14 @@ describe("/usage", () => {
 
 	it("reports when not signed in to GitHub Copilot", async () => {
 		const { ctx, rec, get } = makeCtx(undefined);
-		await handleUsage(ctx);
+		await handleUsage(ctx, get);
 		expect(get).toHaveBeenCalledWith("github-copilot");
 		expect(rec.lines.join("\n")).toContain("Not signed in to GitHub Copilot");
 	});
 
 	it("reports when the stored credential is an API key, not OAuth", async () => {
-		const { ctx, rec } = makeCtx({ type: "api_key", key: "abc" });
-		await handleUsage(ctx);
+		const { ctx, rec, get } = makeCtx({ type: "api_key", key: "abc" });
+		await handleUsage(ctx, get);
 		expect(rec.lines.join("\n")).toContain("Not signed in to GitHub Copilot");
 	});
 
@@ -63,8 +61,8 @@ describe("/usage", () => {
 				completions: { unlimited: true },
 			},
 		});
-		const { ctx, rec } = makeCtx(COPILOT_CREDENTIAL);
-		await handleUsage(ctx);
+		const { ctx, rec, get } = makeCtx(COPILOT_CREDENTIAL);
+		await handleUsage(ctx, get);
 
 		expect(fetchMock).toHaveBeenCalledWith(
 			"https://api.github.com/copilot_internal/user",
@@ -91,15 +89,15 @@ describe("/usage", () => {
 				},
 			},
 		});
-		const { ctx, rec } = makeCtx(COPILOT_CREDENTIAL);
-		await handleUsage(ctx);
+		const { ctx, rec, get } = makeCtx(COPILOT_CREDENTIAL);
+		await handleUsage(ctx, get);
 		expect(rec.lines).toContain("Premium requests: 0 of 300 remaining (0 percent). Overage used: 12.");
 	});
 
 	it("uses the enterprise API host when an enterprise URL is stored", async () => {
 		const fetchMock = stubFetch({ quota_snapshots: {} });
-		const { ctx } = makeCtx({ ...COPILOT_CREDENTIAL, enterpriseUrl: "company.ghe.com" });
-		await handleUsage(ctx);
+		const { ctx, get } = makeCtx({ ...COPILOT_CREDENTIAL, enterpriseUrl: "company.ghe.com" });
+		await handleUsage(ctx, get);
 		expect(fetchMock).toHaveBeenCalledWith("https://api.company.ghe.com/copilot_internal/user", expect.anything());
 	});
 
@@ -111,8 +109,8 @@ describe("/usage", () => {
 				completions: {},
 			},
 		});
-		const { ctx, rec } = makeCtx(COPILOT_CREDENTIAL);
-		await handleUsage(ctx);
+		const { ctx, rec, get } = makeCtx(COPILOT_CREDENTIAL);
+		await handleUsage(ctx, get);
 		expect(rec.lines).toContain("Premium requests: quota unavailable.");
 		expect(rec.lines).toContain("Chat: quota unavailable.");
 		expect(rec.lines).toContain("Completions: quota unavailable.");
@@ -121,8 +119,8 @@ describe("/usage", () => {
 
 	it("derives the percentage when the response omits percent_remaining", async () => {
 		stubFetch({ quota_snapshots: { premium_interactions: { entitlement: 300, remaining: 75 } } });
-		const { ctx, rec } = makeCtx(COPILOT_CREDENTIAL);
-		await handleUsage(ctx);
+		const { ctx, rec, get } = makeCtx(COPILOT_CREDENTIAL);
+		await handleUsage(ctx, get);
 		expect(rec.lines).toContain("Premium requests: 75 of 300 remaining (25 percent).");
 	});
 
@@ -132,22 +130,22 @@ describe("/usage", () => {
 			quota_reset_date: 20260801,
 			quota_snapshots: { premium_interactions: { entitlement: 50, quota_remaining: 10, percent_remaining: 20 } },
 		});
-		const { ctx, rec } = makeCtx(COPILOT_CREDENTIAL);
-		await handleUsage(ctx);
+		const { ctx, rec, get } = makeCtx(COPILOT_CREDENTIAL);
+		await handleUsage(ctx, get);
 		expect(rec.lines).toEqual(["Premium requests: 10 of 50 remaining (20 percent)."]);
 	});
 
 	it("treats a non-object quota_snapshots as no quota information", async () => {
 		stubFetch({ quota_snapshots: "none" });
-		const { ctx, rec } = makeCtx(COPILOT_CREDENTIAL);
-		await handleUsage(ctx);
+		const { ctx, rec, get } = makeCtx(COPILOT_CREDENTIAL);
+		await handleUsage(ctx, get);
 		expect(rec.lines).toContain("No quota information was returned for this account.");
 	});
 
 	it("prints an error when the request fails", async () => {
 		stubFetch({}, false, 401, "Unauthorized");
-		const { ctx, rec } = makeCtx(COPILOT_CREDENTIAL);
-		await handleUsage(ctx);
+		const { ctx, rec, get } = makeCtx(COPILOT_CREDENTIAL);
+		await handleUsage(ctx, get);
 		expect(rec.errors.join("\n")).toContain("Could not read quota: 401 Unauthorized.");
 	});
 });

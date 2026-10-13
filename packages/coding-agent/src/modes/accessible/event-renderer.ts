@@ -17,7 +17,10 @@
  *   one line per distinct word, e.g. `bash grep ok`, `bash grep (5) ok`, or
  *   `bash npm failed`. The word is the first *informative* one, skipping navigation
  *   and wrapper prefixes (`cd pkg && grep …` reads as `grep`, not `cd`). The command
- *   arguments and the full output are never printed.
+ *   arguments and the full output are never printed. powershell calls are summarised
+ *   the same way (`powershell Get-ChildItem ok`).
+ * - Calls a tool makes through `ctx.executeTool()` (e.g. from a codemode script) carry
+ *   `parentToolCallId`; they are not announced, since the parent tool's own line covers them.
  */
 
 import { basename, dirname } from "node:path";
@@ -27,6 +30,8 @@ import { lastNonEmptyLine, truncateLine } from "./line-writer.ts";
 import type { EventRenderer, LineWriter } from "./types.ts";
 
 const FILE_TOOLS = new Set(["read", "edit", "write", "ls", "grep", "find"]);
+/** Shell tools summarised by command word and status. */
+const SHELL_TOOLS = new Set(["bash", "powershell"]);
 const MAX_BUFFERED_LINE = 2000;
 const MAX_SUMMARY = 100;
 
@@ -50,6 +55,8 @@ interface FileEntry {
 }
 
 interface BashEntry {
+	/** Shell tool name (`bash` or `powershell`). */
+	shell: string;
 	firstWord: string;
 	ok: boolean;
 }
@@ -112,10 +119,15 @@ class AccessibleEventRenderer implements EventRenderer {
 				this.flushText();
 				break;
 			case "tool_execution_start":
-				this.handleToolStart(event.toolCallId, event.toolName, event.args);
+				// Nested calls (made by another tool) are covered by the parent tool's line.
+				if (event.parentToolCallId === undefined) {
+					this.handleToolStart(event.toolCallId, event.toolName, event.args);
+				}
 				break;
 			case "tool_execution_end":
-				this.handleToolEnd(event.toolCallId, event.toolName, event.result, event.isError);
+				if (event.parentToolCallId === undefined) {
+					this.handleToolEnd(event.toolCallId, event.toolName, event.result, event.isError);
+				}
 				break;
 			case "turn_end":
 			case "agent_end":
@@ -272,8 +284,8 @@ class AccessibleEventRenderer implements EventRenderer {
 	// --- tools ---------------------------------------------------------------
 
 	private handleToolStart(toolCallId: string, toolName: string, toolArgs: unknown): void {
-		if (toolName === "bash") {
-			// A bash call breaks any pending file-tool group so reading order is preserved.
+		if (SHELL_TOOLS.has(toolName)) {
+			// A shell call breaks any pending file-tool group so reading order is preserved.
 			this.flushFileRun();
 			this.pendingBashLabels.set(toolCallId, commandWordOf(commandOf(toolArgs)));
 			return;
@@ -297,10 +309,10 @@ class AccessibleEventRenderer implements EventRenderer {
 	}
 
 	private handleToolEnd(toolCallId: string, toolName: string, result: unknown, isError: boolean): void {
-		if (toolName === "bash") {
-			const firstWord = this.pendingBashLabels.get(toolCallId) ?? "bash";
+		if (SHELL_TOOLS.has(toolName)) {
+			const firstWord = this.pendingBashLabels.get(toolCallId) ?? toolName;
 			this.pendingBashLabels.delete(toolCallId);
-			this.bashRun.push({ firstWord, ok: !isError });
+			this.bashRun.push({ shell: toolName, firstWord, ok: !isError });
 			return;
 		}
 		if (FILE_TOOLS.has(toolName)) {
@@ -339,22 +351,22 @@ class AccessibleEventRenderer implements EventRenderer {
 		if (this.bashRun.length === 0) {
 			return;
 		}
-		// Group by (firstWord, ok) preserving first-seen order
-		const order: string[] = [];
-		const counts = new Map<string, number>();
+		// Group by (shell, firstWord, ok) preserving first-seen order (Map keeps insertion order).
+		const groups = new Map<string, { entry: BashEntry; count: number }>();
 		for (const entry of this.bashRun) {
-			const key = `${entry.firstWord}:${entry.ok ? "ok" : "failed"}`;
-			if (!counts.has(key)) {
-				order.push(key);
-				counts.set(key, 0);
+			const key = JSON.stringify([entry.shell, entry.firstWord, entry.ok]);
+			const group = groups.get(key);
+			if (group) {
+				group.count++;
+			} else {
+				groups.set(key, { entry, count: 1 });
 			}
-			counts.set(key, counts.get(key)! + 1);
 		}
-		for (const key of order) {
-			const [firstWord, status] = key.split(":");
-			const count = counts.get(key)!;
+		for (const { entry, count } of groups.values()) {
 			const countStr = count > 1 ? ` (${count})` : "";
-			this.writer.line(withStop(`bash ${firstWord}${countStr} ${status}`));
+			const word = entry.firstWord ? `${entry.firstWord}${countStr}` : countStr.trimStart();
+			const label = word ? `${entry.shell} ${word}` : entry.shell;
+			this.writer.line(withStop(`${label} ${entry.ok ? "ok" : "failed"}`));
 		}
 		this.bashRun = [];
 	}
@@ -432,7 +444,20 @@ const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 /** Commands that merely wrap another command; the wrapped command is the informative one. */
 const WRAPPER_WORDS = new Set(["sudo", "env", "command", "nice", "time", "nohup", "exec", "xargs"]);
 /** Pure navigation/assignment segments skipped in favor of the command that follows them. */
-const NAVIGATION_WORDS = new Set(["cd", "pushd", "popd", "export", "set", "unset", "source", "."]);
+const NAVIGATION_WORDS = new Set([
+	"cd",
+	"pushd",
+	"popd",
+	"export",
+	"set",
+	"unset",
+	"source",
+	".",
+	// PowerShell navigation cmdlets.
+	"Set-Location",
+	"Push-Location",
+	"Pop-Location",
+]);
 
 /**
  * Pick the most informative single word to label a bash call.

@@ -1,4 +1,8 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ENV_AGENT_DIR } from "../src/config.ts";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
 import { type SessionInfo, SessionManager } from "../src/core/session-manager.ts";
@@ -13,6 +17,15 @@ const MODELS = [
 ];
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+/** Point the agent dir (and so auth.json) at an empty temp dir, so /usage sees no stored credential. */
+function useEmptyAgentDir(): void {
+	vi.stubEnv(ENV_AGENT_DIR, mkdtempSync(join(tmpdir(), "pi-accessible-commands-")));
+}
+
+afterEach(() => {
+	vi.unstubAllEnvs();
+});
 
 function makeCtx(
 	overrides: {
@@ -57,9 +70,8 @@ function makeCtx(
 		setThinkingLevel,
 		getActiveToolNames: () => activeTools,
 		setActiveToolsByName,
-		modelRegistry: {
+		modelRuntime: {
 			getAvailable: vi.fn().mockResolvedValue(MODELS),
-			authStorage: { get: vi.fn().mockReturnValue(undefined) },
 		},
 		setModel,
 		compact,
@@ -170,6 +182,7 @@ describe("dispatchCommand routing", () => {
 	});
 
 	it("/usage and its hidden /token synonym reach the same handler", async () => {
+		useEmptyAgentDir();
 		const usage = makeCtx();
 		expect(await dispatchCommand("/usage", usage.ctx)).toEqual({ kind: "handled" });
 		const token = makeCtx();
@@ -180,6 +193,7 @@ describe("dispatchCommand routing", () => {
 	});
 
 	it("ignores anything typed after /usage", async () => {
+		useEmptyAgentDir();
 		const plain = makeCtx();
 		await dispatchCommand("/usage", plain.ctx);
 		for (const line of ["/usage quota", "/usage banana", "/token quota please"]) {
@@ -223,7 +237,7 @@ describe("/model", () => {
 		expect(rec.lines).toContain("  1. opus.");
 		expect(rec.lines).toContain("openai:");
 		expect(rec.lines).toContain("  2. gpt.");
-		expect(setModel).toHaveBeenCalledWith(MODELS[1]);
+		expect(setModel).toHaveBeenCalledWith(MODELS[1], { persist: true });
 	});
 
 	it("keeps current model when selection is blank", async () => {
@@ -235,7 +249,7 @@ describe("/model", () => {
 	it("switches by pattern argument", async () => {
 		const { ctx, setModel } = makeCtx();
 		await dispatchCommand("/model gpt", ctx);
-		expect(setModel).toHaveBeenCalledWith(MODELS[1]);
+		expect(setModel).toHaveBeenCalledWith(MODELS[1], { persist: true });
 	});
 
 	it("reports when a pattern does not match", async () => {
@@ -253,7 +267,7 @@ describe("/effort", () => {
 		expect(rec.lines).toContain("Current thinking level: medium.");
 		expect(rec.lines).toContain("Available levels:");
 		expect(rec.lines).toContain("  5. high.");
-		expect(setThinkingLevel).toHaveBeenCalledWith("high");
+		expect(setThinkingLevel).toHaveBeenCalledWith("high", { persist: true });
 		expect(rec.lines).toContain("Thinking level set to high.");
 	});
 
@@ -267,7 +281,7 @@ describe("/effort", () => {
 	it("sets the level directly from an argument", async () => {
 		const { ctx, rec, setThinkingLevel } = makeCtx();
 		await dispatchCommand("/effort xhigh", ctx);
-		expect(setThinkingLevel).toHaveBeenCalledWith("xhigh");
+		expect(setThinkingLevel).toHaveBeenCalledWith("xhigh", { persist: true });
 		expect(rec.lines).toContain("Thinking level set to xhigh.");
 	});
 
@@ -294,6 +308,12 @@ describe("/plan and /build", () => {
 		expect(planMode.isActive()).toBe(true);
 		expect(rec.lines).toContain("Plan mode on. Edit, write, and bash are disabled.");
 		expect(rec.lines).toContain("Active tools: read, grep, find, ls.");
+	});
+
+	it("/plan also removes the Windows powershell tool", async () => {
+		const { ctx, setActiveToolsByName } = makeCtx({ activeTools: ["read", "powershell", "edit", "write"] });
+		await dispatchCommand("/plan", ctx);
+		expect(setActiveToolsByName).toHaveBeenCalledWith(["read", "grep", "find", "ls"]);
 	});
 
 	it("/build restores the full tool set and leaves plan mode", async () => {

@@ -6,7 +6,7 @@
  * agent as a prompt; anything else prints a hint.
  */
 
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { type SessionInfo, SessionManager } from "../../core/session-manager.ts";
 import { runLogin, runLogout } from "./login.ts";
 import { modelLabel } from "./model-label.ts";
@@ -172,7 +172,7 @@ async function handleNew(ctx: CommandContext): Promise<void> {
 }
 
 async function handleModel(ctx: CommandContext, pattern: string): Promise<void> {
-	const models = await ctx.session.modelRegistry.getAvailable();
+	const models = await ctx.session.modelRuntime.getAvailable(undefined, { signal: AbortSignal.timeout(15_000) });
 	const current = ctx.session.model;
 
 	if (models.length === 0) {
@@ -190,14 +190,14 @@ async function handleModel(ctx: CommandContext, pattern: string): Promise<void> 
 			ctx.writer.line(`No model matching "${pattern}". Current model: ${modelLabel(current)}.`);
 			return;
 		}
-		await ctx.session.setModel(match);
+		await ctx.session.setModel(match, { persist: true });
 		ctx.writer.line(`Model set to ${match.provider}/${match.id}.`);
 		return;
 	}
 
 	// Group by provider so the list reads as "provider: model" instead of repeating the
 	// provider prefix on every line. Numbering runs across the whole (grouped) list.
-	const byProvider = new Map<string, Model<any>[]>();
+	const byProvider = new Map<string, Model<Api>[]>();
 	const providerOrder: string[] = [];
 	for (const model of models) {
 		let list = byProvider.get(model.provider);
@@ -212,7 +212,7 @@ async function handleModel(ctx: CommandContext, pattern: string): Promise<void> 
 
 	ctx.writer.line(`Current model: ${modelLabel(current)}.`);
 	ctx.writer.line("Available models:");
-	const ordered: Model<any>[] = [];
+	const ordered: Model<Api>[] = [];
 	for (const provider of providerOrder) {
 		ctx.writer.line(`${provider}:`);
 		const providerModels = (byProvider.get(provider) ?? []).slice().sort((a, b) => a.id.localeCompare(b.id));
@@ -229,7 +229,7 @@ async function handleModel(ctx: CommandContext, pattern: string): Promise<void> 
 		return;
 	}
 	const selected = ordered[choice - 1];
-	await ctx.session.setModel(selected);
+	await ctx.session.setModel(selected, { persist: true });
 	ctx.writer.line(`Model set to ${selected.provider}/${selected.id}.`);
 }
 
@@ -253,7 +253,7 @@ async function handleEffort(ctx: CommandContext, arg: string): Promise<void> {
 			);
 			return;
 		}
-		ctx.session.setThinkingLevel(match);
+		ctx.session.setThinkingLevel(match, { persist: true });
 		// Report the resulting level (setThinkingLevel clamps to the model's range).
 		ctx.writer.line(`Thinking level set to ${ctx.session.thinkingLevel}.`);
 		return;
@@ -273,7 +273,7 @@ async function handleEffort(ctx: CommandContext, arg: string): Promise<void> {
 		return;
 	}
 	const selected = levels[choice - 1];
-	ctx.session.setThinkingLevel(selected);
+	ctx.session.setThinkingLevel(selected, { persist: true });
 	ctx.writer.line(`Thinking level set to ${ctx.session.thinkingLevel}.`);
 }
 

@@ -454,3 +454,28 @@ describe("session events", () => {
 		]);
 	});
 });
+
+describe("powershell and nested tool calls", () => {
+	it("summarises powershell calls like bash, grouped by command word", () => {
+		const events = [
+			toolStart("p1", "powershell", { command: "Set-Location src; Get-ChildItem -Recurse" }),
+			toolEnd("p1", "powershell", textResult("a.ts")),
+			toolStart("p2", "powershell", { command: "Get-ChildItem" }),
+			toolEnd("p2", "powershell", textResult("b.ts")),
+			toolStart("b1", "bash", { command: "ls" }),
+			toolEnd("b1", "bash", textResult("x")),
+		];
+		expect(render(events)).toEqual(["powershell Get-ChildItem (2) ok.", "bash ls ok."]);
+	});
+
+	it("does not announce calls another tool made through ctx.executeTool()", () => {
+		const nested = (event: AgentSessionEvent) => ({ ...event, parentToolCallId: "c1" }) as AgentSessionEvent;
+		const events = [
+			toolStart("c1", "codemode", { code: "await tools.read({ path: 'a.ts' })" }),
+			nested(toolStart("n1", "read", { path: "a.ts" })),
+			nested(toolEnd("n1", "read", textResult("content"))),
+			toolEnd("c1", "codemode", textResult("done")),
+		];
+		expect(render(events)).toEqual(["» codemode: done."]);
+	});
+});

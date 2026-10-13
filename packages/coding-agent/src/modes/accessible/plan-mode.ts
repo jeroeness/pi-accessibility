@@ -3,7 +3,7 @@
  *
  * A lightweight, screen-reader-friendly toggle between two working modes:
  *
- * - Plan mode (`/plan`): the mutating tools (edit, write, bash) are removed from
+ * - Plan mode (`/plan`): the mutating tools (edit, write, bash, powershell) are removed from
  *   the active set, leaving only read-only tools (read, grep, find, ls, and any
  *   other non-mutating tools). The model physically cannot change the workspace,
  *   and a short directive is prefixed to each turn asking it to investigate and
@@ -17,8 +17,8 @@
 
 import type { AgentSession } from "../../core/agent-session.ts";
 
-/** Tools removed from the active set while plan mode is on. */
-const MUTATING_TOOLS = new Set(["edit", "write", "bash"]);
+/** Tools removed from the active set while plan mode is on. powershell is the Windows shell tool. */
+const MUTATING_TOOLS = new Set(["edit", "write", "bash", "powershell"]);
 
 /**
  * Read-only tools plan mode ensures are available for exploration. grep/find/ls

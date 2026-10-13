@@ -8,6 +8,7 @@
 
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
+import { MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { createCompleter } from "./autocomplete.ts";
 import { COMMAND_NAMES, dispatchCommand } from "./commands.ts";
@@ -17,6 +18,7 @@ import { isUnknownModel } from "./model-label.ts";
 import { createPlanMode } from "./plan-mode.ts";
 import { createNodeReadlinePrompter, InputClosedError, QuestionAbortedError } from "./prompter.ts";
 import { runResumeReplay } from "./resume-replay.ts";
+import { confirmMissingSessionCwd, createTextProjectTrustContext } from "./session-prompts.ts";
 import { createTextUIContext } from "./text-ui-context.ts";
 import { createTranscriptRecorder, readTranscriptLines } from "./transcript.ts";
 import { createTurnUsageCollector, formatTurnSummary } from "./turn-summary.ts";
@@ -63,7 +65,7 @@ export async function runAccessibleMode(
 			case "help":
 				return COMMAND_NAMES;
 			case "model":
-				return session.modelRegistry.getAvailable().map((m) => `${m.provider}/${m.id}`);
+				return session.modelRuntime.getAvailableSnapshot().map((m) => `${m.provider}/${m.id}`);
 			default:
 				return null;
 		}
@@ -87,6 +89,14 @@ export async function runAccessibleMode(
 		thinkingWriter: writer,
 	});
 
+	// Extension dialogs, project trust prompts, and other questions are asked as text.
+	const textUI = createTextUIContext(prompter, writer);
+
+	let exitCode: number | null = null;
+	const requestExit = (code: number): void => {
+		if (exitCode === null) exitCode = code;
+	};
+
 	const dispose = async (): Promise<void> => {
 		if (disposed) return;
 		disposed = true;
@@ -100,10 +110,10 @@ export async function runAccessibleMode(
 		// Follow the active session so recording (and future resumes) target its transcript.
 		recorder.setSessionFile(session.sessionFile);
 		await session.bindExtensions({
-			uiContext: createTextUIContext(prompter, writer),
+			uiContext: textUI,
 			mode: "accessible",
 			commandContextActions: {
-				waitForIdle: () => session.agent.waitForIdle(),
+				waitForIdle: () => session.waitForIdle(),
 				newSession: async (newSessionOptions) => runtime.newSession(newSessionOptions),
 				fork: async (entryId, forkOptions) => {
 					const result = await runtime.fork(entryId, forkOptions);
@@ -122,6 +132,11 @@ export async function runAccessibleMode(
 				reload: async () => {
 					await session.reload();
 				},
+			},
+			// An extension asked pi to shut down: leave the loop once the current turn ends.
+			shutdownHandler: () => {
+				requestExit(0);
+				prompter.close();
 			},
 			onError: (err) => {
 				writer.error(`Extension error (${err.extensionPath}): ${err.error}`);
@@ -158,14 +173,13 @@ export async function runAccessibleMode(
 
 	// --- exit + interrupt wiring --------------------------------------------
 
-	let exitCode: number | null = null;
-	const requestExit = (code: number): void => {
-		if (exitCode === null) exitCode = code;
-	};
 	prompter.onClose(() => requestExit(0));
 
 	let awaitingExitConfirm = false;
 	let interrupted = false;
+	// A submitted prompt is running (including run setup and extension follow-up runs),
+	// so Ctrl+C aborts it rather than arming the exit confirmation.
+	let turnRunning = false;
 	// While a modal prompt (e.g. the resume confirmation) is open, Ctrl+C is routed
 	// here to cancel that prompt instead of arming the app-exit confirmation.
 	let modalSigint: (() => void) | undefined;
@@ -174,7 +188,7 @@ export async function runAccessibleMode(
 			modalSigint();
 			return;
 		}
-		if (session.isStreaming) {
+		if (turnRunning || session.isStreaming) {
 			interrupted = true;
 			void session.abort();
 		} else if (awaitingExitConfirm) {
@@ -196,8 +210,21 @@ export async function runAccessibleMode(
 				question: (query, signal) => prompter.question(query, signal),
 				readTranscriptLines,
 				switchSession: async (path) => {
+					// Project trust for a session in another project is asked as text.
+					const projectTrustContextFactory = (cwd: string) => createTextProjectTrustContext(cwd, textUI);
 					try {
-						return await runtime.switchSession(path);
+						try {
+							return await runtime.switchSession(path, { projectTrustContextFactory });
+						} catch (error: unknown) {
+							if (!(error instanceof MissingSessionCwdError)) throw error;
+							if (!(await confirmMissingSessionCwd(textUI, error.issue))) {
+								return { cancelled: true };
+							}
+							return await runtime.switchSession(path, {
+								cwdOverride: error.issue.fallbackCwd,
+								projectTrustContextFactory,
+							});
+						}
 					} catch (error: unknown) {
 						writer.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
 						return { cancelled: true };
@@ -229,13 +256,18 @@ export async function runAccessibleMode(
 		// describes this run, so replaying it on a later resume would be noise.
 		writer.line(planMode.isActive() ? "Planning." : "Working.");
 		const startedAt = Date.now();
+		turnRunning = true;
 		try {
 			// In plan mode, prefix the plan directive so the model produces a plan
 			// rather than acting (the tool restriction is enforced separately).
 			await session.prompt(planMode.decorate(text), images ? { images } : undefined);
+			// Runs an extension starts when this one settles belong to the same turn, so the
+			// turn summary and the end of the bell wait for them too.
+			await session.waitForIdle();
 		} catch (error: unknown) {
 			writer.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
 		} finally {
+			turnRunning = false;
 			prompter.setTurnActive(false);
 		}
 		renderer.endTurn();
@@ -281,7 +313,9 @@ export async function runAccessibleMode(
 			const trimmed = line.trim();
 			if (trimmed === "") continue;
 
-			if (trimmed.startsWith("/")) {
+			// Slash commands, plus `:q` (quit), go through the command dispatcher; anything
+			// else is a prompt for the model.
+			if (trimmed.startsWith("/") || trimmed === ":q") {
 				try {
 					const result = await dispatchCommand(trimmed, {
 						session,

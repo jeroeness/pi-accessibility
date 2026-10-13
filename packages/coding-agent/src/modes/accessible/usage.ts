@@ -9,6 +9,9 @@
  * so the shape may change; failures degrade to a plain message.
  */
 
+import type { Credential } from "@earendil-works/pi-ai";
+import { getAuthPath } from "../../config.ts";
+import { readStoredCredential } from "../../core/auth-storage.ts";
 import type { CommandContext } from "./types.ts";
 
 const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
@@ -103,9 +106,18 @@ function quotaLine(label: string, detail: QuotaDetail | undefined): string | und
 	return base;
 }
 
+/** Reads a credential stored by /login (auth.json in the agent directory). */
+export type StoredCredentialReader = (providerId: string) => Credential | undefined;
+
+const readStoredAuthCredential: StoredCredentialReader = (providerId) =>
+	readStoredCredential(providerId, getAuthPath());
+
 /** Run `/usage`: fetch and print the Copilot premium-request quota. */
-export async function handleUsage(ctx: CommandContext): Promise<void> {
-	const credential = ctx.session.modelRegistry.authStorage.get(GITHUB_COPILOT_PROVIDER_ID);
+export async function handleUsage(
+	ctx: CommandContext,
+	readCredential: StoredCredentialReader = readStoredAuthCredential,
+): Promise<void> {
+	const credential = readCredential(GITHUB_COPILOT_PROVIDER_ID);
 	if (!credential || credential.type !== "oauth") {
 		ctx.writer.line("Not signed in to GitHub Copilot. Use /login and choose GitHub Copilot first.");
 		return;
