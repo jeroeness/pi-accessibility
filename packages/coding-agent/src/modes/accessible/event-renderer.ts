@@ -24,6 +24,7 @@
  */
 
 import { basename, dirname } from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent } from "../../core/agent-session.ts";
 import { lastNonEmptyLine, truncateLine } from "./line-writer.ts";
@@ -80,6 +81,8 @@ class AccessibleEventRenderer implements EventRenderer {
 	private readonly thinkingWriter: LineWriter;
 	private blockOutput: boolean;
 	private verbose: boolean;
+	/** Error of a failed request, printed once the run ends (see {@link noteRequestError}). */
+	private pendingError: string | undefined;
 
 	constructor(writer: LineWriter, thinkingWriter: LineWriter, blockOutput: boolean, verbose: boolean) {
 		this.writer = writer;
@@ -116,7 +119,9 @@ class AccessibleEventRenderer implements EventRenderer {
 				this.handleAssistantEvent(event.assistantMessageEvent);
 				break;
 			case "message_end":
+				this.flushThinking();
 				this.flushText();
+				this.noteRequestError(event.message);
 				break;
 			case "tool_execution_start":
 				// Nested calls (made by another tool) are covered by the parent tool's line.
@@ -129,8 +134,16 @@ class AccessibleEventRenderer implements EventRenderer {
 					this.handleToolEnd(event.toolCallId, event.toolName, event.result, event.isError);
 				}
 				break;
-			case "turn_end":
 			case "agent_end":
+				// A retryable failure is announced by the `[retrying …]` line that follows;
+				// only a failure that ends the run is reported here.
+				if (event.willRetry) {
+					this.pendingError = undefined;
+				}
+				this.flushText();
+				this.flushRequestError();
+				break;
+			case "turn_end":
 				// Tool runs are NOT flushed at per-step boundaries: they accumulate across
 				// steps so repeated calls collapse into one counted line (e.g. `bash find (2)
 				// ok`). They flush when broken by assistant text, a different tool category,
@@ -166,6 +179,7 @@ class AccessibleEventRenderer implements EventRenderer {
 		this.flushFileRun();
 		this.flushThinking();
 		this.flushText();
+		this.flushRequestError();
 	}
 
 	// --- assistant streaming -------------------------------------------------
@@ -193,16 +207,12 @@ class AccessibleEventRenderer implements EventRenderer {
 				break;
 			case "text_end":
 			case "done":
+			case "error":
+				// The agent loop ends the message on `done`/`error` without forwarding them as
+				// updates; a failed request is reported from `message_end` instead.
 				this.flushThinking();
 				this.flushText();
 				break;
-			case "error": {
-				this.flushThinking();
-				this.flushText();
-				const message = event.error?.errorMessage ?? event.reason ?? "request failed";
-				this.writer.error(`Error: ${message}`);
-				break;
-			}
 			default:
 				// thinking_start / thinking_signature and toolcall_* are intentionally ignored:
 				// the reasoning block announces itself on its first delta.
@@ -407,6 +417,31 @@ class AccessibleEventRenderer implements EventRenderer {
 		this.flushFileRun();
 		this.flushThinking();
 		this.flushText();
+	}
+
+	/**
+	 * Remember a failed request. Provider errors (bad API key, rate limits, ...) reach
+	 * the session only as an assistant message with `stopReason: "error"`; without a line
+	 * for them a screen-reader user hears nothing but the turn summary. The error is
+	 * printed once, at `agent_end` (or when the turn ends), so a failure that is about to
+	 * be retried is not spoken twice. Aborts are announced by `[interrupted]` instead.
+	 */
+	private noteRequestError(message: AgentMessage): void {
+		if (!("role" in message) || message.role !== "assistant" || message.stopReason !== "error") {
+			return;
+		}
+		this.pendingError = message.errorMessage?.trim() || "request failed";
+	}
+
+	private flushRequestError(): void {
+		const error = this.pendingError;
+		this.pendingError = undefined;
+		if (error === undefined) {
+			return;
+		}
+		this.flushBashRun();
+		this.flushFileRun();
+		this.writer.error(withStop(`Error: ${error}`));
 	}
 
 	private handleCompactionEnd(event: Extract<AgentSessionEvent, { type: "compaction_end" }>): void {

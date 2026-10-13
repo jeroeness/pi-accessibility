@@ -14,6 +14,7 @@ import chalk from "chalk";
 import lockfile from "proper-lockfile";
 import { selectConfig } from "./cli/config-selector.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
+import { tuiRequestedByEnv } from "./cli/ui-mode.ts";
 import {
 	APP_NAME,
 	CONFIG_DIR_NAME,
@@ -753,7 +754,10 @@ interface CommandSettingsResult {
 }
 
 function getCommandAppMode(): AppMode {
-	return process.stdin.isTTY && process.stdout.isTTY ? "interactive" : "print";
+	if (!process.stdin.isTTY || !process.stdout.isTTY) return "print";
+	// As for the main entry point, the accessible text prompts are the default and the
+	// TUI selector is opt-in (PI_TUI).
+	return tuiRequestedByEnv() ? "interactive" : "accessible";
 }
 
 function reportProjectTrustWarnings(warnings: readonly string[]): void {
@@ -802,7 +806,7 @@ async function createCommandSettingsManager(options: {
 			cwd: options.cwd,
 			mode: appMode,
 			settingsManager,
-			hasUI: appMode === "interactive",
+			hasUI: appMode === "interactive" || appMode === "accessible",
 		}),
 		onExtensionError: (message) => projectTrustWarnings.push(message),
 	});

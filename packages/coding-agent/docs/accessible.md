@@ -33,7 +33,8 @@ Piped or redirected input or output still uses one-shot [print mode](usage.md) (
 so scripts are unaffected.
 
 On startup, pi asks its setup questions as plain text too: whether to trust a project
-that ships its own extensions or settings, and whether to continue a resumed session whose
+that ships its own extensions or settings (also for `pi install`, `pi remove`, `pi update`,
+and `pi config`, unless `PI_TUI` is set; `pi config` itself is still full-screen), and whether to continue a resumed session whose
 working directory no longer exists. The model catalog (for example GitHub Copilot's model
 list) is refreshed in the background after startup.
 
@@ -46,7 +47,10 @@ list) is refreshed in the background after startup.
   token/TPS/cache counters from the graphical footer are not shown. Those numbers are
   reported once instead, in the end-of-turn summary described below.
 - **Text, not color.** Every state is labeled in words (`Error:`, `[interrupted]`). ANSI
-  escape codes are stripped from all output.
+  escape codes are stripped from all output. A failed request (for example a rejected API
+  key) is reported once as an `Error:` line; one that pi retries is announced as
+  `[retrying …]` instead. The line editor at the `^` prompt still uses the terminal's
+  cursor controls to draw the line you are typing (see Keys).
 - **Model reasoning is not shown** unless you ask for it. `/verbose` toggles it on and
   off (off at startup, or on from the start with `--verbose`): when on, each reasoning
   block is opened with a `Thinking.` line and then streams like any other reply text.
@@ -101,7 +105,9 @@ Turn: 41 seconds. Context: 18k of 200k tokens (9 percent). Cache hits: 87 percen
 ```
 
 When no model is configured yet, the banner reads `No model selected. Use /login or /model
-to select a model.` — run `/login` to sign in.
+to select a model.` — run `/login` to sign in. When a continued session's model is no
+longer available, a `Warning: Could not restore model …` line after the banner names the
+model used instead.
 
 ## Commands
 
@@ -112,7 +118,7 @@ to select a model.` — run `/login` to sign in.
 | `/logout` | Remove a stored credential. |
 | `/model [pattern]` | Show the current model, or switch it (numbered list, or match by pattern). The choice is saved as the default. |
 | `/effort [level]` | Show or set the thinking level (numbered list, or a level name). The choice is saved as the default. |
-| `/plan` | Plan mode: edit, write, and shell tools are disabled, and the model replies with a numbered plan. |
+| `/plan` | Plan mode: only read-only tools stay available, and the model replies with a numbered plan (see below). |
 | `/build` | Leave plan mode and restore full tool access. |
 | `/compact [notes]` | Summarize and shrink the conversation context. |
 | `/session` | Show session info and stats. |
@@ -183,7 +189,8 @@ Logged in to Anthropic. Selected anthropic/claude-opus-4-5. Credentials saved to
   code) is printed for you to open in a browser; if the provider asks for a pasted code,
   you type it at the prompt.
 - **API key** prompts for the key (and any other values the provider needs) and stores it.
-  (Note: the key is echoed as you type, like any REPL input.) An empty answer cancels.
+  The key is not echoed while you type (the prompt reads `(typing is hidden) >`), and it is
+  not kept in the input history. An empty answer cancels.
 - Providers whose credentials are only configured outside pi (for example through cloud
   credential files) are listed too; choosing one tells you that, instead of prompting.
 
@@ -196,6 +203,17 @@ Credentials are saved to `~/.pi/agent/auth.json`. `/logout` removes a stored cre
 Anything that is not a command is sent to the agent. Extension-provided slash commands
 work too.
 
+### Plan mode
+
+`/plan` keeps only read-only tools: `read`, `grep`, `find`, `ls`, and tools that declare
+themselves read-only (MCP servers mark each tool) and cannot call other tools. Everything
+else is disabled, including `bash`, `edit`, `write`, `powershell`, `codemode`,
+`tool_search`, subagent-style extension tools, and MCP tools that are not marked
+read-only. Tools that become active later (for example `codemode` when an MCP server
+connects) are dropped again before each turn, and any call to a disabled tool, including
+one made from a script, is blocked. Plan mode stays on across `/new` and `/resume`;
+`/build` restores the full tool set of the current session.
+
 ## Keys
 
 - **Enter** — send the current line.
@@ -205,9 +223,16 @@ work too.
 - **Tab** — complete a command name, a command argument (`/effort`, `/stream`, `/verbose`,
   `/help`, `/model`), or a file path.
 
+Line editing, history (Up/Down), and Tab completion come from Node's readline, which
+redraws the prompt line with cursor-positioning escape codes (`ESC[1G`, `ESC[0J`, and a
+column move). They only touch the line being typed and never repaint output, but they do
+appear in raw terminal logs. The only escape-free readline mode (`TERM=dumb`) has no line
+editing, history, or completion.
+
 ## Not yet supported
 
 Session tree navigation (`/fork`, `/tree`), `/export` / `/share` / `/settings`, and
 image input are not available in accessible mode yet — use the full-screen TUI
-(`pi --tui`) for those. Interactive prompts that extensions raise (confirm / select /
+(`pi --tui`) for those. The `pi -r` session picker and `pi config` are still full-screen;
+use `/resume` inside the REPL instead of `pi -r`. Interactive prompts that extensions raise (confirm / select /
 input) are rendered as plain text questions.

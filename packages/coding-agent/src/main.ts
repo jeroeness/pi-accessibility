@@ -33,6 +33,7 @@ import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
+import { accessibleRequestedByEnv, tuiRequestedByEnv } from "./cli/ui-mode.ts";
 import { APP_NAME, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
@@ -117,19 +118,7 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
  * the heuristics are easy to audit and tune.
  */
 export function accessibleRequested(parsed: Args): boolean {
-	if (parsed.accessible) {
-		return true;
-	}
-	if (isTruthyEnvFlag(process.env.PI_ACCESSIBLE)) {
-		return true;
-	}
-	if (isTruthyEnvFlag(process.env.NO_TUI)) {
-		return true;
-	}
-	if (process.env.TERM === "dumb") {
-		return true;
-	}
-	return false;
+	return parsed.accessible === true || accessibleRequestedByEnv();
 }
 
 /**
@@ -142,13 +131,7 @@ export function tuiRequested(parsed: Args): boolean {
 	if (accessibleRequested(parsed)) {
 		return false;
 	}
-	if (parsed.tui) {
-		return true;
-	}
-	if (isTruthyEnvFlag(process.env.PI_TUI)) {
-		return true;
-	}
-	return false;
+	return parsed.tui === true || tuiRequestedByEnv();
 }
 
 export function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {

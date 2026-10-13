@@ -7,7 +7,8 @@
  */
 
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
-import type { Prompter } from "./types.ts";
+import { Writable } from "node:stream";
+import type { Prompter, QuestionOptions } from "./types.ts";
 
 /** U+0007 BEL: rung when the user types out of turn (while the model is responding). */
 const BELL = String.fromCharCode(7);
@@ -53,10 +54,28 @@ export function createNodeReadlinePrompter(options: NodeReadlinePrompterOptions 
 				);
 			}
 		: undefined;
+	// readline writes through this gate so a secret answer (an API key) can be read
+	// without echoing it: while muted, readline's echo and line redraws are dropped.
+	let muted = false;
+	const gatedOutput = new Writable({
+		write(chunk: Buffer | string, _encoding, callback): void {
+			if (!muted) output.write(chunk);
+			callback();
+		},
+	});
+	// readline wraps lines at the terminal width and redraws on resize.
+	Object.defineProperty(gatedOutput, "columns", { get: () => (output as NodeJS.WriteStream).columns });
+	const onResize = (): void => {
+		gatedOutput.emit("resize");
+	};
+	output.on("resize", onResize);
+	// readline keeps (and mutates) this array, so a secret answer can be dropped from it.
+	const history: string[] = [];
 	const rl: ReadlineInterface = createInterface({
 		input,
-		output,
+		output: gatedOutput,
 		terminal: true,
+		history,
 		...(completer ? { completer } : {}),
 	});
 
@@ -80,13 +99,14 @@ export function createNodeReadlinePrompter(options: NodeReadlinePrompterOptions 
 
 	rl.on("close", () => {
 		closed = true;
+		output.off("resize", onResize);
 		// Unblock any in-flight question so the caller's loop can exit.
 		pendingReject?.(new InputClosedError());
 		pendingReject = undefined;
 	});
 
 	return {
-		question(query: string, signal?: AbortSignal): Promise<string> {
+		question(query: string, signal?: AbortSignal, questionOptions?: QuestionOptions): Promise<string> {
 			if (closed) {
 				return Promise.reject(new InputClosedError());
 			}
@@ -96,9 +116,15 @@ export function createNodeReadlinePrompter(options: NodeReadlinePrompterOptions 
 			return new Promise<string>((resolve, reject) => {
 				pendingQuestions++;
 				let settled = false;
+				const secret = questionOptions?.secret === true;
 				const settle = (): void => {
 					if (settled) return;
 					settled = true;
+					if (secret) {
+						// The muted Enter never reached the terminal; end the prompt line here.
+						muted = false;
+						output.write("\n");
+					}
 					pendingQuestions--;
 					pendingReject = undefined;
 					if (signal) signal.removeEventListener("abort", onAbort);
@@ -109,17 +135,25 @@ export function createNodeReadlinePrompter(options: NodeReadlinePrompterOptions 
 				}
 				const done = (answer: string): void => {
 					settle();
+					// Up-arrow must never recall a secret.
+					if (secret && history[0] === answer) history.shift();
 					resolve(answer);
 				};
 				pendingReject = (error: Error): void => {
 					settle();
 					reject(error);
 				};
+				// A secret prompt is printed directly; readline then reads an unechoed line.
+				if (secret) {
+					output.write(query);
+					muted = true;
+				}
+				const readlineQuery = secret ? "" : query;
 				if (signal) {
 					signal.addEventListener("abort", onAbort, { once: true });
-					rl.question(query, { signal }, done);
+					rl.question(readlineQuery, { signal }, done);
 				} else {
-					rl.question(query, done);
+					rl.question(readlineQuery, done);
 				}
 			});
 		},

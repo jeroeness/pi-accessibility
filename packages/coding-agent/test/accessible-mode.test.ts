@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
 import { runAccessibleMode } from "../src/modes/accessible/accessible-mode.ts";
@@ -358,5 +360,116 @@ describe("runAccessibleMode Ctrl+C", () => {
 		const code = await promise;
 		expect(code).toBe(130);
 		expect(rec.errors).toHaveLength(0); // not surfaced as an error; treated as clean shutdown
+	});
+});
+
+describe("runAccessibleMode request errors and startup warnings", () => {
+	it("prints a request error that only arrives as stopReason error, once", async () => {
+		// Regression: a provider failure (e.g. 401) reaches the session only as an assistant
+		// message with stopReason "error"; the REPL printed nothing but the turn summary.
+		const harness = await createHarness({
+			responses: [{ error: "OpenAI API error (401): Incorrect API key provided" }],
+			settings: { retry: { enabled: false } },
+		});
+		const runtime = {
+			session: harness.session,
+			cwd: harness.tempDir,
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setRebindSession: vi.fn(),
+		} as unknown as AgentSessionRuntime;
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(["hello", "/quit"]);
+
+		await runAccessibleMode(
+			runtime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		expect(rec.errors).toEqual(["Error: OpenAI API error (401): Incorrect API key provided."]);
+		expect(rec.lines.some((line) => line.startsWith("Turn: "))).toBe(true);
+		harness.cleanup();
+	});
+
+	it("warns after the banner when the session's model could not be restored", async () => {
+		const { runtime } = makeStubRuntime({});
+		Object.defineProperty(runtime, "modelFallbackMessage", {
+			value: "Could not restore model gone/model-x. Using faux/faux-1",
+		});
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(["/quit"]);
+
+		await runAccessibleMode(
+			runtime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+
+		expect(rec.lines.slice(0, 4)).toEqual([
+			"Pi by Jeroen Esseveld.",
+			"Model: faux-1.",
+			"Warning: Could not restore model gone/model-x. Using faux/faux-1.",
+			"Type something or type /help.",
+		]);
+	});
+});
+
+describe("runAccessibleMode plan mode", () => {
+	async function runWithNewSession(lines: string[]) {
+		const first = await createHarness();
+		const second = await createHarness();
+		const runtime = {
+			session: first.session,
+			cwd: first.tempDir,
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setRebindSession: vi.fn(),
+			newSession: vi.fn(async () => {
+				runtime.session = second.session;
+				return { cancelled: false };
+			}),
+		};
+		const rec = createRecordingWriter();
+		const fake = createFakePrompter(lines);
+		await runAccessibleMode(
+			runtime as unknown as AgentSessionRuntime,
+			{},
+			{ writer: rec.writer, prompter: fake.prompter, registerSignalHandlers: false },
+		);
+		return { first, second, rec };
+	}
+
+	it("keeps plan mode across /new and restricts the new session's tools too", async () => {
+		const { first, second } = await runWithNewSession(["/plan", "/new", "/quit"]);
+		const tools = second.session.getActiveToolNames();
+		expect(tools).toContain("read");
+		for (const name of ["bash", "edit", "write"]) {
+			expect(tools).not.toContain(name);
+		}
+		first.cleanup();
+		second.cleanup();
+	});
+
+	it("/build after /new restores the new session's own full tool set", async () => {
+		const { first, second } = await runWithNewSession(["/plan", "/new", "/build", "/quit"]);
+		expect(second.session.getActiveToolNames()).toEqual(expect.arrayContaining(["read", "bash", "edit", "write"]));
+		first.cleanup();
+		second.cleanup();
+	});
+
+	it("the session tool-call guard blocks an active tool before it runs", async () => {
+		const harness = await createHarness({
+			responses: [{ toolCalls: [{ name: "bash", args: { command: "echo hi > guarded.txt" } }] }, "done"],
+		});
+		harness.session.setToolCallGuard((name) =>
+			name === "bash" ? "Plan mode is active: bash is disabled." : undefined,
+		);
+		await harness.session.prompt("go");
+
+		const ends = harness.eventsOfType("tool_execution_end");
+		expect(ends).toHaveLength(1);
+		expect(ends[0].isError).toBe(true);
+		expect(JSON.stringify(ends[0].result)).toContain("Plan mode is active: bash is disabled.");
+		expect(existsSync(join(harness.tempDir, "guarded.txt"))).toBe(false);
+		harness.cleanup();
 	});
 });

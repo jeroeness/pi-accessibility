@@ -1,4 +1,6 @@
+import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
+import { createNodeReadlinePrompter } from "../src/modes/accessible/prompter.ts";
 import { createTextUIContext } from "../src/modes/accessible/text-ui-context.ts";
 import { createFakePrompter, createRecordingWriter } from "./accessible-test-support.ts";
 
@@ -72,5 +74,41 @@ describe("timeout", () => {
 		const fake = createFakePrompter([]); // question pends forever
 		const ui = createTextUIContext(fake.prompter, createRecordingWriter().writer);
 		expect(await ui.input("slow?", undefined, { timeout: 5 })).toBeUndefined();
+	});
+});
+
+describe("cancelled dialogs", () => {
+	it("aborts the pending question when the dialog times out", async () => {
+		const fake = createFakePrompter([]);
+		const ui = createTextUIContext(fake.prompter, createRecordingWriter().writer);
+		expect(await ui.select("t", ["a"], { timeout: 5 })).toBeUndefined();
+		expect(fake.signals[0]?.aborted).toBe(true);
+	});
+
+	it("aborts the pending question when the dialog's signal fires", async () => {
+		const fake = createFakePrompter([]);
+		const ui = createTextUIContext(fake.prompter, createRecordingWriter().writer);
+		const controller = new AbortController();
+		const result = ui.input("Name", undefined, { signal: controller.signal });
+		controller.abort();
+		expect(await result).toBeUndefined();
+		expect(fake.signals[0]?.aborted).toBe(true);
+	});
+
+	it("leaves the readline prompter usable after a timed-out dialog (next question gets the next line)", async () => {
+		// Regression: the dialog raced the question against its timeout without cancelling
+		// it, so readline kept the stale question, swallowed the next line, and the REPL's
+		// following prompt never resolved.
+		const input = new PassThrough();
+		const output = new PassThrough();
+		const prompter = createNodeReadlinePrompter({ input, output });
+		const ui = createTextUIContext(prompter, createRecordingWriter().writer);
+
+		expect(await ui.confirm("Proceed?", "details", { timeout: 5 })).toBe(false);
+
+		const next = prompter.question("^ ");
+		input.write("hello\n");
+		expect(await next).toBe("hello");
+		prompter.close();
 	});
 });

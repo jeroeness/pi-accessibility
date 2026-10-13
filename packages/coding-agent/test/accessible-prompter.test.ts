@@ -109,3 +109,58 @@ describe("createNodeReadlinePrompter out-of-turn bell", () => {
 		expect(output.text()).not.toContain(BELL);
 	});
 });
+
+describe("createNodeReadlinePrompter secret questions", () => {
+	it("reads a secret answer without echoing it", async () => {
+		const input = new PassThrough();
+		const output = new RecordingOutput();
+		const prompter = createNodeReadlinePrompter({ input, output });
+
+		const answer = prompter.question("key: ", undefined, { secret: true });
+		input.write("sk-secret-123\n");
+		expect(await answer).toBe("sk-secret-123");
+		prompter.close();
+
+		expect(output.text()).toContain("key: ");
+		expect(output.text()).not.toContain("sk-secret");
+	});
+
+	it("echoes ordinary answers and keeps secrets out of the history", async () => {
+		const input = new PassThrough();
+		const output = new RecordingOutput();
+		const prompter = createNodeReadlinePrompter({ input, output });
+
+		const first = prompter.question("^ ");
+		input.write("hello\n");
+		expect(await first).toBe("hello");
+		expect(output.text()).toContain("hello");
+
+		const secret = prompter.question("key: ", undefined, { secret: true });
+		input.write("sk-secret-123\n");
+		expect(await secret).toBe("sk-secret-123");
+
+		// Up-arrow recalls the previous ordinary line, never the secret.
+		const recalled = prompter.question("^ ");
+		input.write("\u001b[A\n");
+		expect(await recalled).toBe("hello");
+		prompter.close();
+		expect(output.text()).not.toContain("sk-secret");
+	});
+
+	it("restores echo when a secret question is aborted", async () => {
+		const input = new PassThrough();
+		const output = new RecordingOutput();
+		const prompter = createNodeReadlinePrompter({ input, output });
+
+		const controller = new AbortController();
+		const secret = prompter.question("key: ", controller.signal, { secret: true }).catch(() => "aborted");
+		controller.abort();
+		expect(await secret).toBe("aborted");
+
+		const next = prompter.question("^ ");
+		input.write("visible\n");
+		expect(await next).toBe("visible");
+		prompter.close();
+		expect(output.text()).toContain("visible");
+	});
+});

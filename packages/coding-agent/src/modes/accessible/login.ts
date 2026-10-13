@@ -92,9 +92,11 @@ async function answerPrompt(ctx: CommandContext, prompt: AuthPrompt): Promise<st
 	}
 	// End the question with punctuation so a screen reader pauses before the input.
 	ctx.writer.line(/[.?!:]$/.test(prompt.message) ? prompt.message : `${prompt.message}:`);
-	const answer = (
-		await ctx.prompter.question(prompt.placeholder ? `(${prompt.placeholder}) ` : "> ", prompt.signal)
-	).trim();
+	// A secret (an API key) is read without echo, so it never lands on screen or in
+	// scrollback; the prompt says so, since typing then gives no feedback.
+	const secret = prompt.type === "secret";
+	const query = `${secret ? "(typing is hidden) " : ""}${prompt.placeholder ? `(${prompt.placeholder}) ` : "> "}`;
+	const answer = (await ctx.prompter.question(query, prompt.signal, secret ? { secret: true } : undefined)).trim();
 	// An empty answer cancels, so a stray Enter never stores an empty key.
 	if (answer === "") {
 		throw new Error(LOGIN_CANCELLED);

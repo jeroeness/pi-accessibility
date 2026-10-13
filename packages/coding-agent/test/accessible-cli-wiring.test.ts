@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseArgs } from "../src/cli/args.ts";
+import { accessibleRequestedByEnv, tuiRequestedByEnv } from "../src/cli/ui-mode.ts";
 import { accessibleRequested, resolveAppMode, tuiRequested } from "../src/main.ts";
 
 const ENV_KEYS = ["PI_ACCESSIBLE", "NO_TUI", "TERM", "PI_TUI", "PI_LINE_OUTPUT"] as const;
@@ -113,5 +114,20 @@ describe("accessible environment detection", () => {
 			process.env.NO_TUI = "1";
 			expect(tuiRequested(parseArgs(["--tui"]))).toBe(false);
 		});
+	});
+});
+
+describe("environment-only UI mode (package commands)", () => {
+	it("defaults to accessible and opts into the TUI only with PI_TUI", () => {
+		expect(accessibleRequestedByEnv({ TERM: "xterm-256color" })).toBe(false);
+		expect(tuiRequestedByEnv({ TERM: "xterm-256color" })).toBe(false);
+		expect(tuiRequestedByEnv({ TERM: "xterm-256color", PI_TUI: "1" })).toBe(true);
+	});
+
+	it("lets accessible signals beat PI_TUI", () => {
+		for (const env of [{ PI_ACCESSIBLE: "1" }, { NO_TUI: "true" }, { TERM: "dumb" }]) {
+			expect(accessibleRequestedByEnv(env)).toBe(true);
+			expect(tuiRequestedByEnv({ ...env, PI_TUI: "1" })).toBe(false);
+		}
 	});
 });

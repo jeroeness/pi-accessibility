@@ -85,7 +85,7 @@ function makeLoginCtx(options: {
 		rebindSession: async () => {},
 	} as unknown as CommandContext;
 
-	return { ctx, rec, login, logout, refresh, setModel, answers };
+	return { ctx, rec, fake, login, logout, refresh, setModel, answers };
 }
 
 describe("runLogin (API key)", () => {
@@ -100,6 +100,18 @@ describe("runLogin (API key)", () => {
 		// The provider's prompt is spoken with closing punctuation.
 		expect(rec.lines).toContain("Enter API key:");
 		expect(rec.lines.join("\n")).toContain("Saved API key for OpenAI");
+	});
+
+	it("reads the API key without echo and says that typing is hidden", async () => {
+		const { ctx, fake, answers } = makeLoginCtx({
+			providers: [{ id: "openai", name: "OpenAI", apiKey: true }],
+			prompterInputs: ["2", "1", "sk-test-123"],
+		});
+		await runLogin(ctx);
+		expect(answers).toEqual(["sk-test-123"]);
+		// Two provider/method selections, then the secret key question.
+		expect(fake.options).toEqual([undefined, undefined, { secret: true }]);
+		expect(fake.prompts[2]).toBe("(typing is hidden) > ");
 	});
 
 	it("cancels when no key is entered", async () => {
@@ -149,7 +161,7 @@ describe("runLogin (subscription / OAuth)", () => {
 
 	it("renders auth events (URL, device code) and answers prompts and selections from readline", async () => {
 		let selectedId: string | undefined;
-		const { ctx, rec } = makeLoginCtx({
+		const { ctx, rec, fake } = makeLoginCtx({
 			providers: [{ id: "anthropic", name: "Anthropic", oauth: true }],
 			prompterInputs: ["1", "1", "the-code", "2"],
 			loginImpl: async (_id, _type, interaction) => {
@@ -178,6 +190,8 @@ describe("runLogin (subscription / OAuth)", () => {
 			},
 		});
 		await runLogin(ctx);
+		// A pasted code is not a secret: it stays visible so the user can check it.
+		expect(fake.options.every((option) => option === undefined)).toBe(true);
 		const transcript = rec.lines.join("\n");
 		expect(transcript).toContain("https://auth.example/login");
 		expect(transcript).toContain("WXYZ-1234");

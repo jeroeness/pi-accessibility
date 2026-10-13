@@ -68,8 +68,10 @@ cd "$repo_root"
 commit="$(git rev-parse --verify --end-of-options "${source_ref}^{commit}")"
 
 package_version="$(git show "${commit}:packages/coding-agent/package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
-if [[ "$package_version" != "$version" ]]; then
-    echo "Version ${version} does not match package version ${package_version} at ${source_ref}" >&2
+# Fork releases are tagged v<package-version>-vi.<N> without a package bump, so
+# accept that suffix as well as the exact package version.
+if [[ "$version" != "$package_version" && ! "$version" =~ ^${package_version//./\\.}-vi\.[0-9]+$ ]]; then
+    echo "Version ${version} does not match package version ${package_version} (or ${package_version}-vi.<N>) at ${source_ref}" >&2
     exit 1
 fi
 

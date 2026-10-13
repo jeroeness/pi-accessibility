@@ -476,6 +476,8 @@ export class AgentSession {
 	/** Declared tools whose declarations requests leave out, from `prepareLoadout` hooks. */
 	private _hiddenDeclarations: ReadonlySet<string> = new Set();
 	private _toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
+	/** See {@link setToolCallGuard}. */
+	private _toolCallGuard: ((toolName: string) => string | undefined) | undefined;
 	private _toolPromptSnippets: Map<string, string> = new Map();
 	private _toolPromptGuidelines: Map<string, string[]> = new Map();
 
@@ -655,11 +657,24 @@ export class AgentSession {
 		this.agent.afterToolCall = (context) => this._afterToolCall(context);
 	}
 
+	/**
+	 * Install a guard consulted before every tool call, including calls tools make through
+	 * `ctx.executeTool()`. It returns a reason to block the call, or undefined to allow it.
+	 * Pass undefined to remove it. Used by accessible-mode plan mode to keep the agent read-only.
+	 */
+	setToolCallGuard(guard: ((toolName: string) => string | undefined) | undefined): void {
+		this._toolCallGuard = guard;
+	}
+
 	/** `tool_call` handlers. `parentToolCallId` is set for calls another tool made. */
 	private async _beforeToolCall(
 		{ toolCall, args }: BeforeToolCallContext,
 		parentToolCallId?: string,
 	): Promise<BeforeToolCallResult | undefined> {
+		const blockReason = this._toolCallGuard?.(toolCall.name);
+		if (blockReason !== undefined) {
+			return { block: true, reason: blockReason };
+		}
 		const runner = this._extensionRunner;
 		if (!runner.hasHandlers("tool_call")) {
 			return undefined;

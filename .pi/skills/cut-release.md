@@ -19,6 +19,10 @@ the right tag, push it, and verify the result.
 - The package versions (`packages/*/package.json`) are **not** bumped for a
   `-vi.N` release — only a new tag is created. Each `-vi.N` release just points
   at a newer commit on `main`.
+- `scripts/create-source-archive.sh` accepts `--version <pkg-version>` or
+  `<pkg-version>-vi.<N>`, so the workflow builds `pi-<pkg-version>-vi.<N>-source.tar.gz`
+  from a fork tag. Dry run before tagging (after `npm run hydrate:model-data`):
+  `./scripts/create-source-archive.sh --version 1.2.0-vi.1 --ref HEAD --out /tmp/pi-src.tgz`.
 - Release notes come from `scripts/release-notes.mjs extract`, which looks for a
   `## [<version>]` heading in `packages/coding-agent/CHANGELOG.md`. Since
   `1.2.0-vi.N` has no such heading, the notes fall back to `Release <version>`.

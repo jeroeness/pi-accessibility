@@ -142,6 +142,10 @@ export async function runAccessibleMode(
 				writer.error(`Extension error (${err.extensionPath}): ${err.error}`);
 			},
 		});
+		// Plan mode belongs to the REPL: a new or resumed session starts with its own
+		// full tool set, so restrict it again rather than leaving the flag on with
+		// mutating tools active.
+		planMode.reapply(session);
 		unsubscribe?.();
 		unsubscribe = session.subscribe((event) => {
 			turnUsage.handle(event);
@@ -258,9 +262,16 @@ export async function runAccessibleMode(
 		const startedAt = Date.now();
 		turnRunning = true;
 		try {
-			// In plan mode, prefix the plan directive so the model produces a plan
-			// rather than acting (the tool restriction is enforced separately).
-			await session.prompt(planMode.decorate(text), images ? { images } : undefined);
+			// In plan mode, add the plan directive so the model produces a plan rather
+			// than acting, and drop tools activated since /plan (for example codemode
+			// when an MCP server connected). The tool-call guard blocks the rest.
+			planMode.enforce(session);
+			// followUp only applies while a run the REPL did not start (e.g. an extension's)
+			// is streaming: the message is queued after it instead of being rejected.
+			await session.prompt(planMode.decorate(text), {
+				streamingBehavior: "followUp",
+				...(images ? { images } : {}),
+			});
 			// Runs an extension starts when this one settles belong to the same turn, so the
 			// turn summary and the end of the bell wait for them too.
 			await session.waitForIdle();
@@ -287,6 +298,13 @@ export async function runAccessibleMode(
 		writer.line("No model selected. Use /login or /model to select a model.");
 	} else {
 		writer.line(`Model: ${model.id}.`);
+		// A resumed session whose model is gone (or lacks auth) silently falls back to
+		// another model; say so, as the TUI does. Without a model the line above already
+		// covers it.
+		const fallback = runtime.modelFallbackMessage?.trim();
+		if (fallback) {
+			writer.line(`Warning: ${/[.!?]$/.test(fallback) ? fallback : `${fallback}.`}`);
+		}
 	}
 	writer.line("Type something or type /help.");
 
@@ -302,10 +320,17 @@ export async function runAccessibleMode(
 		// --- main loop ------------------------------------------------------
 		while (exitCode === null) {
 			let line: string;
+			// The separating newline is written on its own: inside the readline prompt it
+			// makes every redraw (Tab completion, history, editing mid-line) move the
+			// cursor up a line first.
+			prompter.write("\n");
 			try {
-				line = await prompter.question("\n^ ");
+				line = await prompter.question("^ ");
 			} catch {
-				break; // input closed (EOF / Ctrl+D)
+				// Input closed (EOF / Ctrl+D, or Ctrl+C twice): end the prompt line so the
+				// shell prompt does not start right after "^ ".
+				prompter.write("\n");
+				break;
 			}
 			if (exitCode !== null) break;
 			awaitingExitConfirm = false;

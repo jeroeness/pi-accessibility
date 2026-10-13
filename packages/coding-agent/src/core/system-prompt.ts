@@ -72,7 +72,6 @@ export const SCREEN_READER_OUTPUT_SECTION = "screen_reader_output";
  * appended to a prompt forced by a `before_agent_start` handler, so neither a
  * custom base prompt nor an extension can silently drop the accessibility
  * constraints. See PLAN-ACCESSIBILITY.md.
- * In particular, put NO blank lines between items of a numbered or bulleted list: list items must be on consecutive lines with no gap between them.
  */
 const SCREEN_READER_OUTPUT_RULES_BODY = `Your responses are read aloud by a screen reader, one line at a time, in order. The user cannot skim, see layout, color, bold, or position. Optimize for listening.
 
@@ -80,7 +79,7 @@ const SCREEN_READER_OUTPUT_RULES_BODY = `Your responses are read aloud by a scre
 - Lead with the answer, then any detail. Every word is heard, so cut filler.
 - Do not speak alphanumeric identifiers (session ids, commit hashes, UUIDs, tokens, ticket numbers, long file hashes) unless the user specifically asks for one. They are noise when read aloud; refer to things by name or by list number instead.
 - Avoid reading out long or complex URLs (query parameters, tokens, tracking codes, deep paths); they are painful to hear character by character. Name the destination instead ("the pull request", "the pricing docs"), and give a full URL only when the user asks or must copy it.
-- Use blank lines sparingly. A screen reader voices each blank line as a pause, so separate ideas with a single line break and never stack consecutive blank lines. 
+- Use blank lines sparingly. A screen reader voices each blank line as a pause, so separate ideas with a single line break and never stack consecutive blank lines. Put no blank lines between the items of a numbered or bulleted list; list items go on consecutive lines.
 - End every line with a punctuation mark (. ? ! : or ;). A screen reader relies on it to pause and drop intonation at the end of the line; a line without one slurs into the next. Use a colon for a line that introduces what follows (like "Run this:"). Exception: never append punctuation to a line that is itself a command, path, or code snippet, since it would corrupt what the user copies.
 - Plain text only. No markdown (*, _, #, backticks, code fences), emojis, or decorative symbols; a screen reader speaks them literally.
 - No tables, ASCII art, or diagrams. Give structured data as prose or a numbered list.

@@ -46,7 +46,9 @@ concurrency:
 
 jobs:
   pin:
-    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+    # Upstream-only: the fork's -vi.N tags do not match pi --version, and this
+    # workflow pushes catalog pins to main and fast-forwards stable.
+    if: ${{ github.repository == 'earendil-works/pi' && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -86,7 +88,7 @@ jobs:
   build:
     needs: pin
     # After a catalog publication, only build when the pin changed.
-    if: ${{ github.event_name != 'workflow_run' || needs.pin.outputs.updated == 'true' }}
+    if: ${{ github.repository == 'earendil-works/pi' && (github.event_name != 'workflow_run' || needs.pin.outputs.updated == 'true') }}
     strategy:
       fail-fast: false
       matrix:
@@ -134,7 +136,7 @@ jobs:
 
   update-stable:
     needs: build
-    if: ${{ github.ref_type == 'tag' }}
+    if: ${{ github.repository == 'earendil-works/pi' && github.ref_type == 'tag' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -154,7 +156,7 @@ jobs:
     needs:
       - pin
       - build
-    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.pin.outputs.updated == 'true' }}
+    if: ${{ github.repository == 'earendil-works/pi' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.pin.outputs.updated == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

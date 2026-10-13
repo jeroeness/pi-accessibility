@@ -13,16 +13,30 @@
 - Added `/resume` and `/resumeglobal` commands to accessible mode: they list up to 10 recent sessions (project-scoped or across all projects) numbered newest-first and resume one by number, or resume directly with `/resume <n>`; a blank or invalid selection does not resume.
 - Added text prompts to accessible mode for project trust and for a resumed session whose working directory no longer exists, at startup and on `/resume`, instead of silently not trusting the project or exiting.
 - Added a background model catalog refresh at accessible-mode startup, so dynamic catalogs such as GitHub Copilot list their models.
+- Added `AgentSession.setToolCallGuard()`, a guard consulted before every tool call (including calls tools make through `ctx.executeTool()`) that can block it with a reason.
 
 ### Changed
 
 - Changed accessible-mode `/model`, `/effort`, and the model selected after `/login` to be saved as defaults, matching the previous behavior now that model and thinking changes are session-only unless persisted.
 - Changed accessible-mode `/plan` to also disable the `powershell` tool, and the accessible renderer to summarize `powershell` calls like `bash` and to skip tool calls made by other tools.
 - Changed accessible-mode screen-reader output rules to a `screen_reader_output` system prompt section, which is also appended to prompts forced by `before_agent_start` handlers.
+- Changed accessible-mode `/plan` to an allowlist: only `read`, `grep`, `find`, `ls`, and tools declared read-only (`annotations.readOnlyHint`, as MCP servers report) that reach no other tools stay active. `codemode`, `tool_search`, subagent and other extension tools, and MCP tools not marked read-only are disabled, tools activated later (for example `codemode` when an MCP server connects) are dropped before each turn, and a tool-call guard blocks any other call, including calls made from a codemode script. The plan directive now follows the user's message, so sessions are titled after the user's prompt.
+- Changed accessible-mode plan mode to stay on across `/new` and `/resume`, restricting the new session's tools too; `/build` restores that session's own tool set.
+- Changed `pi install`, `pi remove`, `pi update`, and `pi config` to ask the project trust question as plain text on a terminal, like accessible mode, unless `PI_TUI` is set. `pi config` itself is still a full-screen selector.
+- Changed the accessible `/login` API-key prompt to read the key without echoing it and to keep it out of the input history; the prompt says `(typing is hidden)`.
+- Changed accessible-mode prompts typed while an extension-started run is streaming to be queued as a follow-up instead of failing with "Agent is already processing".
 
 ### Fixed
 
 - Fixed `:q` at the accessible-mode prompt being sent to the model instead of quitting.
+- Fixed provider request errors (such as a 401 for a bad API key) not being shown in accessible mode; a failed request now prints one `Error:` line, unless it is about to be retried.
+- Fixed an extension dialog cancelled by its signal or timeout in accessible mode (for example during `/mcp login`) leaving a readline question pending, which swallowed the next line and hung the prompt.
+- Fixed accessible-mode `/compact` printing a failure twice.
+- Fixed accessible mode not saying that a resumed session's model could not be restored; the fallback warning is printed after the banner.
+- Fixed the accessible-mode prompt redraw moving the cursor up a line (`ESC[1A`) on Tab completion and history recall, and Ctrl+D leaving the shell prompt on the `^` line.
+- Fixed the screen-reader rule against blank lines between list items never reaching the model.
+- Fixed the documented `defaultThinkingLevel` default (`"high"`).
+- Fixed fork release tags (`v<version>-vi.<N>`) failing the source archive version check in the release workflow.
 
 ## [1.2.0] - 2026-10-12
 
